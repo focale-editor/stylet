@@ -1,8 +1,12 @@
 #include "stylet_plugin.h"
 
+#include "stylet_wintab.h"
+
 #include <flutter/event_stream_handler_functions.h>
 #include <flutter/standard_method_codec.h>
 
+#include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
@@ -78,6 +82,23 @@ std::string NativeDeviceIdentifier(HANDLE source_device) {
   return output.str();
 }
 
+/** Converts a null-terminated Windows UTF-16 string into UTF-8. */
+std::string WideStringToUtf8(const wchar_t* value) {
+  if (value == nullptr || *value == L'\0') {
+    return {};
+  }
+  const int size = WideCharToMultiByte(CP_UTF8, 0, value, -1, nullptr, 0,
+                                       nullptr, nullptr);
+  if (size <= 1) {
+    return {};
+  }
+  std::string result(static_cast<size_t>(size), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, value, -1, result.data(), size, nullptr,
+                      nullptr);
+  result.pop_back();
+  return result;
+}
+
 }  // namespace
 
 StyletPlugin::StyletPlugin(flutter::PluginRegistrarWindows* registrar)
@@ -85,6 +106,7 @@ StyletPlugin::StyletPlugin(flutter::PluginRegistrarWindows* registrar)
   if (registrar_->GetView() != nullptr) {
     view_window_ = registrar_->GetView()->GetNativeWindow();
   }
+  wintab_backend_ = std::make_unique<WintabBackend>(view_window_);
 }
 
 StyletPlugin::~StyletPlugin() {
@@ -118,6 +140,7 @@ void StyletPlugin::RegisterWithRegistrar(
           std::unique_ptr<flutter::EventSink<flutter::EncodableValue>>&& events)
           -> std::unique_ptr<
               flutter::StreamHandlerError<flutter::EncodableValue>> {
+        plugin_pointer->wintab_backend_->ClearSamples();
         plugin_pointer->event_sink_ = std::move(events);
         return nullptr;
       },
@@ -126,6 +149,8 @@ void StyletPlugin::RegisterWithRegistrar(
               flutter::StreamHandlerError<flutter::EncodableValue>> {
         plugin_pointer->event_sink_.reset();
         plugin_pointer->last_positions_.clear();
+        plugin_pointer->announced_devices_.clear();
+        plugin_pointer->wintab_backend_->ClearSamples();
         return nullptr;
       });
   plugin->event_channel_->SetStreamHandler(std::move(stream_handler));
@@ -150,6 +175,8 @@ flutter::EncodableList StyletPlugin::GetCapabilities() {
       flutter::EncodableValue("secondaryButton"),
       flutter::EncodableValue("eraser"),
       flutter::EncodableValue("hover"),
+      flutter::EncodableValue("historicalSamples"),
+      flutter::EncodableValue("deviceInfo"),
   };
 }
 
@@ -157,14 +184,17 @@ void StyletPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue>& method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   if (method_call.method_name() == "getCapabilities") {
-    result->Success(flutter::EncodableValue(GetCapabilities()));
+    result->Success(flutter::EncodableValue(GetCurrentCapabilities()));
     return;
   }
   result->NotImplemented();
 }
 
 std::optional<LRESULT> StyletPlugin::HandleWindowMessage(
-    HWND window, UINT message, WPARAM wparam, LPARAM /*lparam*/) {
+    HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+  if (wintab_backend_->HandleWindowMessage(message, wparam, lparam)) {
+    return std::nullopt;
+  }
   const char* phase = PhaseForMessage(message, false);
   if (phase == nullptr || event_sink_ == nullptr) {
     return std::nullopt;
@@ -175,21 +205,106 @@ std::optional<LRESULT> StyletPlugin::HandleWindowMessage(
   if (!GetPointerType(pointer_id, &pointer_type) || pointer_type != PT_PEN) {
     return std::nullopt;
   }
-  POINTER_PEN_INFO pen_info = {};
-  if (GetPointerPenInfo(pointer_id, &pen_info)) {
-    EmitPenEvent(window, message, pointer_id, pen_info);
-  }
+  EmitPenEvents(window, message, pointer_id);
   return std::nullopt;
 }
 
-void StyletPlugin::EmitPenEvent(HWND window, UINT message, UINT32 pointer_id,
-                                const POINTER_PEN_INFO& pen_info) {
+std::vector<POINTER_PEN_INFO> StyletPlugin::ReadPenHistory(
+    UINT32 pointer_id) const {
+  UINT32 count = 0;
+  if (GetPointerPenInfoHistory(pointer_id, &count, nullptr) && count > 0) {
+    const UINT32 capacity = count;
+    std::vector<POINTER_PEN_INFO> history(capacity);
+    if (GetPointerPenInfoHistory(pointer_id, &count, history.data())) {
+      history.resize(std::min(count, capacity));
+      std::reverse(history.begin(), history.end());
+      return history;
+    }
+  }
+
+  POINTER_PEN_INFO current = {};
+  if (GetPointerPenInfo(pointer_id, &current)) {
+    return {current};
+  }
+  return {};
+}
+
+void StyletPlugin::AnnounceDevice(const POINTER_PEN_INFO& pen_info) {
+  if (event_sink_ == nullptr) {
+    return;
+  }
+  const HANDLE source_device = pen_info.pointerInfo.sourceDevice;
+  const std::string identifier = NativeDeviceIdentifier(source_device);
+  if (!announced_devices_.insert(identifier).second) {
+    return;
+  }
+
+  POINTER_DEVICE_INFO device_info = {};
+  const bool has_device_info = GetPointerDevice(source_device, &device_info);
+  flutter::EncodableList features = {
+      flutter::EncodableValue("pressure"),
+      flutter::EncodableValue("tilt"),
+      flutter::EncodableValue("orientation"),
+      flutter::EncodableValue("barrelRotation"),
+      flutter::EncodableValue("primaryButton"),
+      flutter::EncodableValue("secondaryButton"),
+      flutter::EncodableValue("eraser"),
+      flutter::EncodableValue("hover"),
+      flutter::EncodableValue("historicalSamples"),
+      flutter::EncodableValue("deviceInfo"),
+  };
+  if (wintab_backend_->supports_tangential_pressure()) {
+    features.emplace_back("tangentialPressure");
+  }
+  flutter::EncodableMap packet;
+  SetValue(&packet, "type", flutter::EncodableValue("device"));
+  SetValue(&packet, "timestampMicros",
+           flutter::EncodableValue(
+               static_cast<int64_t>(pen_info.pointerInfo.dwTime) * 1000));
+  SetValue(&packet, "phase", flutter::EncodableValue("added"));
+  SetValue(&packet, "kind", flutter::EncodableValue("tablet"));
+  SetValue(&packet, "nativeDeviceIdentifier",
+           flutter::EncodableValue(identifier));
+  if (has_device_info) {
+    const std::string product_name =
+        WideStringToUtf8(device_info.productString);
+    if (!product_name.empty()) {
+      SetValue(&packet, "name", flutter::EncodableValue(product_name));
+    }
+  }
+  SetValue(&packet, "features", flutter::EncodableValue(features));
+  event_sink_->Success(flutter::EncodableValue(packet));
+}
+
+void StyletPlugin::EmitPenEvents(HWND window, UINT message, UINT32 pointer_id) {
+  if (event_sink_ == nullptr) {
+    return;
+  }
+  const std::vector<POINTER_PEN_INFO> history = ReadPenHistory(pointer_id);
+  if (history.empty()) {
+    return;
+  }
+  AnnounceDevice(history.back());
+
+  flutter::EncodableList packets;
+  packets.reserve(history.size());
+  for (size_t index = 0; index < history.size(); ++index) {
+    const UINT sample_message =
+        index + 1 == history.size() ? message : WM_POINTERUPDATE;
+    packets.emplace_back(BuildPenPacket(window, sample_message, pointer_id,
+                                        history[index]));
+  }
+  event_sink_->Success(flutter::EncodableValue(packets));
+}
+
+flutter::EncodableMap StyletPlugin::BuildPenPacket(
+    HWND window, UINT message, UINT32 pointer_id,
+    const POINTER_PEN_INFO& pen_info) {
   const bool is_down =
       (pen_info.pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT) != 0;
   const char* phase = PhaseForMessage(message, is_down);
-  if (phase == nullptr || event_sink_ == nullptr) {
-    return;
-  }
+  // Every caller filters unsupported messages before building a packet.
+  assert(phase != nullptr);
 
   POINT position = pen_info.pointerInfo.ptPixelLocation;
   HWND coordinate_window = view_window_ == nullptr ? window : view_window_;
@@ -271,8 +386,9 @@ void StyletPlugin::EmitPenEvent(HWND window, UINT message, UINT32 pointer_id,
                                      kDegreesToRadians));
     features.emplace_back("barrelRotation");
   }
+  wintab_backend_->EnrichPacket(pen_info.pointerInfo.dwTime, &packet,
+                                &features);
   SetValue(&packet, "features", flutter::EncodableValue(features));
-  event_sink_->Success(flutter::EncodableValue(packet));
 
   if (message == WM_POINTERUP || message == WM_POINTERLEAVE ||
       message == WM_POINTERCAPTURECHANGED) {
@@ -280,6 +396,15 @@ void StyletPlugin::EmitPenEvent(HWND window, UINT message, UINT32 pointer_id,
   } else {
     last_positions_[pointer_id] = std::make_pair(x, y);
   }
+  return packet;
+}
+
+flutter::EncodableList StyletPlugin::GetCurrentCapabilities() const {
+  flutter::EncodableList capabilities = GetCapabilities();
+  if (wintab_backend_->supports_tangential_pressure()) {
+    capabilities.emplace_back("tangentialPressure");
+  }
+  return capabilities;
 }
 
 }  // namespace stylet

@@ -30,7 +30,7 @@ class MethodChannelStylet extends StyletPlatform {
   });
 
   @override
-  Stream<StyletEvent> get events => _events ??= eventChannel.receiveBroadcastStream().map(decodeStyletEvent);
+  Stream<StyletEvent> get events => _events ??= eventChannel.receiveBroadcastStream().expand(decodeStyletEvents);
 
   @override
   Future<StylusCapabilities> getCapabilities() async {
@@ -47,6 +47,25 @@ class MethodChannelStylet extends StyletPlatform {
   }
 }
 
+/// Decodes one event-channel message, including historical event batches.
+@visibleForTesting
+Iterable<StyletEvent> decodeStyletEvents(Object? value) sync* {
+  if (value is List<Object?>) {
+    for (final Object? item in value) {
+      yield decodeStyletEvent(item);
+    }
+    return;
+  }
+  final Map<Object?, Object?> map = _requiredMap(value, context: 'event');
+  if (_requiredString(map, 'type') == 'batch') {
+    for (final Object? item in _requiredList(map, 'events')) {
+      yield decodeStyletEvent(item);
+    }
+    return;
+  }
+  yield decodeStyletEvent(map);
+}
+
 /// Decodes one platform-channel map into its strongly typed event.
 @visibleForTesting
 StyletEvent decodeStyletEvent(Object? value) {
@@ -54,6 +73,9 @@ StyletEvent decodeStyletEvent(Object? value) {
   return switch (_requiredString(map, 'type')) {
     'motion' => _decodeMotionEvent(map),
     'action' => _decodeActionEvent(map),
+    'device' => _decodeDeviceEvent(map),
+    'pad' => _decodePadEvent(map),
+    'batch' => throw const FormatException('Use decodeStyletEvents to decode a Stylet batch.'),
     final String type => throw FormatException('Unknown Stylet event type "$type".'),
   };
 }
@@ -87,6 +109,7 @@ StylusMotionEvent _decodeMotionEvent(Map<Object?, Object?> map) {
     tiltY: _optionalDouble(map, 'tiltY'),
     barrelRotation: _optionalDouble(map, 'barrelRotation'),
     tangentialPressure: _optionalDouble(map, 'tangentialPressure'),
+    wheelDelta: _optionalDouble(map, 'wheelDelta'),
     features: _featuresFromValue(map['features']),
   );
 }
@@ -100,6 +123,51 @@ StylusActionEvent _decodeActionEvent(Map<Object?, Object?> map) {
     action: _actionFromName(_requiredString(map, 'action')),
     phase: _actionPhaseFromName(_requiredString(map, 'phase')),
     pose: poseValue == null ? null : _decodePose(_requiredMap(poseValue, context: 'pose')),
+  );
+}
+
+/// Decodes a native tablet, tool, or pad connection change.
+StylusDeviceEvent _decodeDeviceEvent(Map<Object?, Object?> map) {
+  final int? buttonCount = _optionalInt(map, 'buttonCount');
+  if (buttonCount != null && buttonCount < 0) {
+    throw const FormatException('A Stylet device button count must be non-negative.');
+  }
+  return StylusDeviceEvent(
+    timeStamp: Duration(microseconds: _requiredInt(map, 'timestampMicros')),
+    source: StyletEventSource.native,
+    phase: _devicePhaseFromName(_requiredString(map, 'phase')),
+    device: StylusDevice(
+      identifier: _requiredString(map, 'nativeDeviceIdentifier'),
+      kind: _deviceKindFromName(_requiredString(map, 'kind')),
+      name: _optionalString(map, 'name'),
+      vendorIdentifier: _optionalInt(map, 'vendorIdentifier'),
+      productIdentifier: _optionalInt(map, 'productIdentifier'),
+      tool: switch (_optionalString(map, 'tool')) {
+        final String name => _toolFromName(name),
+        null => null,
+      },
+      buttonCount: buttonCount,
+      features: _featuresFromValue(map['features']),
+    ),
+  );
+}
+
+/// Decodes one native graphics-tablet pad control change.
+TabletPadEvent _decodePadEvent(Map<Object?, Object?> map) {
+  final int controlIndex = _requiredInt(map, 'controlIndex');
+  final int? mode = _optionalInt(map, 'mode');
+  if (controlIndex < 0 || (mode != null && mode < 0)) {
+    throw const FormatException('Stylet pad indices and modes must be non-negative.');
+  }
+  return TabletPadEvent(
+    timeStamp: Duration(microseconds: _requiredInt(map, 'timestampMicros')),
+    source: StyletEventSource.native,
+    deviceIdentifier: _requiredString(map, 'nativeDeviceIdentifier'),
+    control: _padControlFromName(_requiredString(map, 'control')),
+    controlIndex: controlIndex,
+    phase: _padPhaseFromName(_requiredString(map, 'phase')),
+    value: _optionalDouble(map, 'value'),
+    mode: mode,
   );
 }
 
@@ -156,6 +224,42 @@ StylusActionPhase _actionPhaseFromName(String name) => switch (name) {
   _ => throw FormatException('Unknown stylus action phase "$name".'),
 };
 
+/// Parses a native device kind while rejecting incompatible values.
+StylusDeviceKind _deviceKindFromName(String name) => switch (name) {
+  'tablet' => StylusDeviceKind.tablet,
+  'tool' => StylusDeviceKind.tool,
+  'pad' => StylusDeviceKind.pad,
+  'unknown' => StylusDeviceKind.unknown,
+  _ => throw FormatException('Unknown stylus device kind "$name".'),
+};
+
+/// Parses a native device lifetime phase.
+StylusDevicePhase _devicePhaseFromName(String name) => switch (name) {
+  'added' => StylusDevicePhase.added,
+  'changed' => StylusDevicePhase.changed,
+  'removed' => StylusDevicePhase.removed,
+  _ => throw FormatException('Unknown stylus device phase "$name".'),
+};
+
+/// Parses a native tablet-pad control kind.
+TabletPadControl _padControlFromName(String name) => switch (name) {
+  'button' => TabletPadControl.button,
+  'ring' => TabletPadControl.ring,
+  'strip' => TabletPadControl.strip,
+  'dial' => TabletPadControl.dial,
+  'mode' => TabletPadControl.mode,
+  _ => throw FormatException('Unknown tablet-pad control "$name".'),
+};
+
+/// Parses a native tablet-pad interaction phase.
+TabletPadPhase _padPhaseFromName(String name) => switch (name) {
+  'began' => TabletPadPhase.began,
+  'changed' => TabletPadPhase.changed,
+  'ended' => TabletPadPhase.ended,
+  'discrete' => TabletPadPhase.discrete,
+  _ => throw FormatException('Unknown tablet-pad phase "$name".'),
+};
+
 /// Converts an optional list of names into an immutable feature set.
 Set<StylusFeature> _featuresFromValue(Object? value) {
   if (value == null) {
@@ -174,6 +278,15 @@ Map<Object?, Object?> _requiredMap(Object? value, {required String context}) {
     return value;
   }
   throw FormatException('The Stylet $context must be a map.');
+}
+
+/// Reads a required list field.
+List<Object?> _requiredList(Map<Object?, Object?> map, String key) {
+  final Object? value = map[key];
+  if (value is List<Object?>) {
+    return value;
+  }
+  throw FormatException('Stylet field "$key" must be a list.');
 }
 
 /// Reads a required string field.

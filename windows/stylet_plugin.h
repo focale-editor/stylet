@@ -13,10 +13,16 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace stylet {
+
+/** Forward declaration of the optional dynamically loaded Wintab bridge. */
+class WintabBackend;
 
 /** Collects high-fidelity WM_POINTER pen data for the Dart Stylet API. */
 class StyletPlugin : public flutter::Plugin {
@@ -42,6 +48,12 @@ class StyletPlugin : public flutter::Plugin {
 
   /** Latest logical position for each Windows pointer identifier. */
   std::unordered_map<UINT32, std::pair<double, double>> last_positions_;
+
+  /** Native pointer devices already announced to the current Dart listener. */
+  std::unordered_set<std::string> announced_devices_;
+
+  /** Optional Wintab bridge used for driver-only pen axes. */
+  std::unique_ptr<WintabBackend> wintab_backend_;
 
  public:
   /** Creates a plugin associated with a live Windows registrar. */
@@ -73,9 +85,22 @@ class StyletPlugin : public flutter::Plugin {
   std::optional<LRESULT> HandleWindowMessage(HWND window, UINT message,
                                              WPARAM wparam, LPARAM lparam);
 
-  /** Converts and emits one Windows pen pointer message. */
-  void EmitPenEvent(HWND window, UINT message, UINT32 pointer_id,
-                    const POINTER_PEN_INFO& pen_info);
+  /** Retrieves every hardware sample coalesced into the current pointer message. */
+  std::vector<POINTER_PEN_INFO> ReadPenHistory(UINT32 pointer_id) const;
+
+  /** Announces a Windows pointer device once per Dart stream subscription. */
+  void AnnounceDevice(const POINTER_PEN_INFO& pen_info);
+
+  /** Converts and emits every sample represented by one Windows pointer message. */
+  void EmitPenEvents(HWND window, UINT message, UINT32 pointer_id);
+
+  /** Converts one Windows pen sample into a standard-codec packet. */
+  flutter::EncodableMap BuildPenPacket(HWND window, UINT message,
+                                       UINT32 pointer_id,
+                                       const POINTER_PEN_INFO& pen_info);
+
+  /** Returns capabilities adjusted to the optional drivers available now. */
+  flutter::EncodableList GetCurrentCapabilities() const;
 };
 
 }  // namespace stylet

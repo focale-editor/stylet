@@ -23,7 +23,7 @@ abstract class StyletPlatform extends PlatformInterface {
     _instance = instance;
   }
 
-  /// Native stylus samples and body interactions from this backend.
+  /// Every native motion, body action, device, and tablet-pad event.
   Stream<StyletEvent> get events => const Stream.empty();
 
   /// Returns every feature this backend can potentially expose.

@@ -154,6 +154,51 @@ void main() {
       await platform.dispose();
     });
 
+    test('tracks connected native devices and exposes pad events', () async {
+      final _FakeStyletPlatform platform = _FakeStyletPlatform();
+      final Stylet stylet = Stylet(platform: platform);
+      final Future<TabletPadEvent> nextPadEvent = stylet.padEvents.first;
+      final StylusDevice device = StylusDevice(
+        identifier: 'tablet:1',
+        kind: StylusDeviceKind.tablet,
+        name: 'Test tablet',
+        features: const {StylusFeature.deviceInfo, StylusFeature.tabletPadButtons},
+      );
+      platform.emit(
+        StylusDeviceEvent(
+          timeStamp: Duration.zero,
+          source: StyletEventSource.native,
+          phase: StylusDevicePhase.added,
+          device: device,
+        ),
+      );
+      platform.emit(
+        const TabletPadEvent(
+          timeStamp: Duration(milliseconds: 1),
+          source: StyletEventSource.native,
+          deviceIdentifier: 'tablet:1:pad',
+          control: TabletPadControl.button,
+          controlIndex: 2,
+          phase: TabletPadPhase.began,
+        ),
+      );
+
+      check(stylet.connectedDevices['tablet:1']).isNotNull().equals(device);
+      check((await nextPadEvent).isPressed).equals(true);
+
+      platform.emit(
+        StylusDeviceEvent(
+          timeStamp: const Duration(milliseconds: 2),
+          source: StyletEventSource.native,
+          phase: StylusDevicePhase.removed,
+          device: device,
+        ),
+      );
+      check(stylet.connectedDevices).isEmpty();
+      await stylet.dispose();
+      await platform.dispose();
+    });
+
     test('rejects conversion after disposal', () async {
       final _FakeStyletPlatform platform = _FakeStyletPlatform();
       final Stylet stylet = Stylet(platform: platform);

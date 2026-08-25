@@ -32,6 +32,9 @@ class Stylet {
   /// Recent native motion samples ordered from oldest to newest.
   final List<StylusMotionEvent> _recentNativeMotions = [];
 
+  /// Native devices currently known to this controller by identifier.
+  final Map<String, StylusDevice> _connectedDevices = {};
+
   /// Whether this controller has released its platform subscription.
   bool _isDisposed = false;
 
@@ -42,7 +45,7 @@ class Stylet {
     _cacheSubscription = _events.listen(_rememberNativeEvent, onError: _reportPlatformError);
   }
 
-  /// Native motion samples and body interactions reported by the platform.
+  /// Every motion, body action, device, and tablet-pad event from the platform.
   Stream<StyletEvent> get events => _events;
 
   /// Native motion samples, including axes Flutter does not expose directly.
@@ -50,6 +53,15 @@ class Stylet {
 
   /// Double-tap and squeeze interactions reported by supported styluses.
   Stream<StylusActionEvent> get actions => _events.where((event) => event is StylusActionEvent).cast<StylusActionEvent>();
+
+  /// Native tablet, tool, and pad connection or metadata changes.
+  Stream<StylusDeviceEvent> get deviceEvents => _events.where((event) => event is StylusDeviceEvent).cast<StylusDeviceEvent>();
+
+  /// Physical graphics-tablet pad button, ring, strip, and dial input.
+  Stream<TabletPadEvent> get padEvents => _events.where((event) => event is TabletPadEvent).cast<TabletPadEvent>();
+
+  /// Immutable snapshot of native devices currently known to this controller.
+  Map<String, StylusDevice> get connectedDevices => Map.unmodifiable(_connectedDevices);
 
   /// Features the active platform backend can potentially provide.
   Future<StylusCapabilities> get capabilities => _platform.getCapabilities();
@@ -73,11 +85,20 @@ class Stylet {
     final StreamSubscription<StyletEvent>? subscription = _cacheSubscription;
     _cacheSubscription = null;
     _recentNativeMotions.clear();
+    _connectedDevices.clear();
     await subscription?.cancel();
   }
 
-  /// Retains native motion samples used to enrich Flutter pointer events.
+  /// Retains native motions and maintains the connected-device snapshot.
   void _rememberNativeEvent(StyletEvent event) {
+    if (event case final StylusDeviceEvent deviceEvent) {
+      if (deviceEvent.phase == StylusDevicePhase.removed) {
+        _connectedDevices.remove(deviceEvent.device.identifier);
+      } else {
+        _connectedDevices[deviceEvent.device.identifier] = deviceEvent.device;
+      }
+      return;
+    }
     if (event is! StylusMotionEvent) {
       return;
     }

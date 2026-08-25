@@ -9,6 +9,10 @@
 
 #include "stylet_plugin_private.h"
 
+#ifdef STYLET_HAS_WAYLAND
+#include "stylet_wayland.h"
+#endif
+
 /** Casts a GObject instance to StyletPlugin after checking its runtime type. */
 #define STYLET_PLUGIN(obj) \
   (G_TYPE_CHECK_INSTANCE_CAST((obj), stylet_plugin_get_type(), StyletPlugin))
@@ -27,6 +31,39 @@ static constexpr gint64 kFlutterPrimaryStylusButton = 2;
 
 /** Flutter button bit representing the second stylus side button. */
 static constexpr gint64 kFlutterSecondaryStylusButton = 4;
+
+/** Device-description bit representing pressure support. */
+static constexpr guint kFeaturePressure = 1U << 0;
+
+/** Device-description bit representing tilt and orientation support. */
+static constexpr guint kFeatureTilt = 1U << 1;
+
+/** Device-description bit representing hover distance support. */
+static constexpr guint kFeatureDistance = 1U << 2;
+
+/** Device-description bit representing barrel rotation support. */
+static constexpr guint kFeatureRotation = 1U << 3;
+
+/** Device-description bit representing tangential pressure support. */
+static constexpr guint kFeatureTangentialPressure = 1U << 4;
+
+/** Device-description bit representing tablet-pad buttons. */
+static constexpr guint kFeaturePadButtons = 1U << 5;
+
+/** Device-description bit representing a tablet-pad ring. */
+static constexpr guint kFeaturePadRing = 1U << 6;
+
+/** Device-description bit representing a tablet-pad strip. */
+static constexpr guint kFeaturePadStrip = 1U << 7;
+
+/** Own feature metadata accumulated for one observed GTK device. */
+struct GdkDeviceState {
+  /** Stylet feature bits discovered for the device. */
+  guint features;
+
+  /** Largest observed one-based pad button count. */
+  guint button_count;
+};
 
 /** Owns channels, GTK handlers, and the latest position used for deltas. */
 struct _StyletPlugin {
@@ -57,6 +94,9 @@ struct _StyletPlugin {
   /** Signal handler for tablet proximity exit. */
   gulong proximity_out_handler;
 
+  /** Signal handler for generic GTK tablet-pad events. */
+  gulong pad_event_handler;
+
   /** Whether Dart currently listens to native stylus events. */
   gboolean listening;
 
@@ -71,6 +111,14 @@ struct _StyletPlugin {
 
   /** Tablet tool serial associated with the latest position. */
   guint64 last_tool_serial;
+
+  /** GTK tool and pad descriptions indexed by their native identifiers. */
+  GHashTable* announced_devices;
+
+#ifdef STYLET_HAS_WAYLAND
+  /** Optional direct tablet-v2 backend used on compatible Wayland sessions. */
+  StyletWaylandBackend* wayland_backend;
+#endif
 };
 
 G_DEFINE_TYPE(StyletPlugin, stylet_plugin, g_object_get_type())
@@ -136,6 +184,15 @@ static gboolean is_stylus_event(const GdkEvent* event) {
          source == GDK_SOURCE_CURSOR;
 }
 
+/** Whether tablet-v2 currently replaces GTK's lower-fidelity event stream. */
+static gboolean uses_wayland_backend(const StyletPlugin* self) {
+#ifdef STYLET_HAS_WAYLAND
+  return stylet_wayland_backend_is_active(self->wayland_backend);
+#else
+  return FALSE;
+#endif
+}
+
 /** Returns `eraser` for an inverted GTK tool and `pen` otherwise. */
 static const gchar* tool_name(const GdkEvent* event) {
   GdkDeviceTool* tool = get_device_tool(event);
@@ -155,6 +212,186 @@ static gchar* native_device_identifier(const GdkEvent* event,
   GdkDevice* device = gdk_event_get_source_device(event);
   const gchar* name = device == nullptr ? "tablet" : gdk_device_get_name(device);
   return g_strdup_printf("%s:%" G_GUINT64_FORMAT, name, tool_serial);
+}
+
+/** Creates a stable descriptive identifier for a GTK tablet pad. */
+static gchar* native_pad_identifier(const GdkEvent* event) {
+  GdkDevice* device = gdk_event_get_source_device(event);
+  const gchar* name = device == nullptr ? "tablet-pad" : gdk_device_get_name(device);
+  const gchar* vendor = device == nullptr ? nullptr : gdk_device_get_vendor_id(device);
+  const gchar* product = device == nullptr ? nullptr : gdk_device_get_product_id(device);
+  return g_strdup_printf("gdk-pad:%s:%s:%s", name,
+                         vendor == nullptr ? "unknown" : vendor,
+                         product == nullptr ? "unknown" : product);
+}
+
+/** Converts one optional hexadecimal GTK identifier into a channel integer. */
+static guint64 parse_device_identifier(const gchar* value) {
+  if (value == nullptr || *value == '\0') {
+    return 0;
+  }
+  gchar* end = nullptr;
+  const guint64 result = g_ascii_strtoull(value, &end, 16);
+  return end == value ? 0 : result;
+}
+
+/** Returns feature bits inferred from the axes of one GTK input device. */
+static guint gdk_device_features(GdkDevice* device) {
+  if (device == nullptr) {
+    return 0;
+  }
+  guint features = 0;
+  gboolean has_tilt = FALSE;
+  const gint axis_count = gdk_device_get_n_axes(device);
+  for (gint index = 0; index < axis_count; ++index) {
+    switch (gdk_device_get_axis_use(device, index)) {
+      case GDK_AXIS_PRESSURE:
+        features |= kFeaturePressure;
+        break;
+      case GDK_AXIS_XTILT:
+      case GDK_AXIS_YTILT:
+        has_tilt = TRUE;
+        break;
+      case GDK_AXIS_DISTANCE:
+        features |= kFeatureDistance;
+        break;
+      case GDK_AXIS_ROTATION:
+        features |= kFeatureRotation;
+        break;
+      case GDK_AXIS_WHEEL:
+      case GDK_AXIS_SLIDER:
+        features |= kFeatureTangentialPressure;
+        break;
+      default:
+        break;
+    }
+  }
+  if (has_tilt) {
+    features |= kFeatureTilt;
+  }
+  return features;
+}
+
+/** Builds a standard-codec feature list from GTK device-description bits. */
+static FlValue* device_feature_list(guint features, gboolean is_pad) {
+  FlValue* result = fl_value_new_list();
+  append_feature(result, "deviceInfo");
+  if (is_pad) {
+    if ((features & kFeaturePadButtons) != 0) {
+      append_feature(result, "tabletPadButtons");
+    }
+    if ((features & kFeaturePadRing) != 0) {
+      append_feature(result, "tabletPadRing");
+    }
+    if ((features & kFeaturePadStrip) != 0) {
+      append_feature(result, "tabletPadStrip");
+    }
+    return result;
+  }
+  append_feature(result, "primaryButton");
+  append_feature(result, "secondaryButton");
+  append_feature(result, "eraser");
+  append_feature(result, "hover");
+  if ((features & kFeaturePressure) != 0) {
+    append_feature(result, "pressure");
+  }
+  if ((features & kFeatureTilt) != 0) {
+    append_feature(result, "tilt");
+    append_feature(result, "orientation");
+  }
+  if ((features & kFeatureDistance) != 0) {
+    append_feature(result, "distance");
+  }
+  if ((features & kFeatureRotation) != 0) {
+    append_feature(result, "barrelRotation");
+  }
+  if ((features & kFeatureTangentialPressure) != 0) {
+    append_feature(result, "tangentialPressure");
+  }
+  return result;
+}
+
+/** Emits one GTK device description or connection change. */
+static void send_gdk_device_packet(StyletPlugin* self, const GdkEvent* event,
+                                   const gchar* phase, const gchar* kind,
+                                   const gchar* identifier, const gchar* tool,
+                                   const GdkDeviceState* state) {
+  if (!self->listening || self->event_channel == nullptr) {
+    return;
+  }
+  GdkDevice* device = gdk_event_get_source_device(event);
+  g_autoptr(FlValue) packet = fl_value_new_map();
+  fl_value_set_string_take(packet, "type", fl_value_new_string("device"));
+  fl_value_set_string_take(
+      packet, "timestampMicros",
+      fl_value_new_int(static_cast<gint64>(gdk_event_get_time(event)) * 1000));
+  fl_value_set_string_take(packet, "phase", fl_value_new_string(phase));
+  fl_value_set_string_take(packet, "kind", fl_value_new_string(kind));
+  fl_value_set_string_take(packet, "nativeDeviceIdentifier",
+                           fl_value_new_string(identifier));
+  if (device != nullptr) {
+    fl_value_set_string_take(packet, "name",
+                             fl_value_new_string(gdk_device_get_name(device)));
+    const guint64 vendor =
+        parse_device_identifier(gdk_device_get_vendor_id(device));
+    const guint64 product =
+        parse_device_identifier(gdk_device_get_product_id(device));
+    if (vendor != 0) {
+      fl_value_set_string_take(packet, "vendorIdentifier",
+                               fl_value_new_int(static_cast<gint64>(vendor)));
+    }
+    if (product != 0) {
+      fl_value_set_string_take(packet, "productIdentifier",
+                               fl_value_new_int(static_cast<gint64>(product)));
+    }
+  }
+  if (tool != nullptr) {
+    fl_value_set_string_take(packet, "tool", fl_value_new_string(tool));
+  }
+  if (state->button_count != 0) {
+    fl_value_set_string_take(
+        packet, "buttonCount",
+        fl_value_new_int(static_cast<gint64>(state->button_count)));
+  }
+  fl_value_set_string_take(
+      packet, "features",
+      device_feature_list(state->features, strcmp(kind, "pad") == 0));
+
+  g_autoptr(GError) error = nullptr;
+  if (!fl_event_channel_send(self->event_channel, packet, nullptr, &error)) {
+    g_warning("Failed to send a Stylet device event: %s",
+              error == nullptr ? "unknown error" : error->message);
+  }
+}
+
+/** Announces or updates one GTK tablet tool and handles proximity removal. */
+static void update_gdk_tool(StyletPlugin* self, const GdkEvent* event,
+                            const gchar* identifier, const gchar* phase) {
+  GdkDeviceState* state = static_cast<GdkDeviceState*>(
+      g_hash_table_lookup(self->announced_devices, identifier));
+  if (strcmp(phase, "removed") == 0) {
+    if (state != nullptr) {
+      send_gdk_device_packet(self, event, "removed", "tool", identifier,
+                             tool_name(event), state);
+      g_hash_table_remove(self->announced_devices, identifier);
+    }
+    return;
+  }
+
+  const guint features =
+      gdk_device_features(gdk_event_get_source_device(event));
+  if (state == nullptr) {
+    state = g_new0(GdkDeviceState, 1);
+    state->features = features;
+    state->button_count = 2;
+    g_hash_table_insert(self->announced_devices, g_strdup(identifier), state);
+    send_gdk_device_packet(self, event, "added", "tool", identifier,
+                           tool_name(event), state);
+  } else if ((features & ~state->features) != 0) {
+    state->features |= features;
+    send_gdk_device_packet(self, event, "changed", "tool", identifier,
+                           tool_name(event), state);
+  }
 }
 
 /** Converts GTK button state to Flutter's public stylus button bit field. */
@@ -199,6 +436,10 @@ static void send_motion(StyletPlugin* self, const GdkEvent* event,
   g_autofree gchar* identifier = native_device_identifier(event, tool_serial);
   fl_value_set_string_take(packet, "nativeDeviceIdentifier",
                            fl_value_new_string(identifier));
+  const gboolean is_removing = strcmp(phase, "removed") == 0;
+  if (!is_removing) {
+    update_gdk_tool(self, event, identifier, phase);
+  }
   set_float(packet, "x", x);
   set_float(packet, "y", y);
   set_float(packet, "deltaX", same_tool ? x - self->last_x : 0.0);
@@ -261,7 +502,11 @@ static void send_motion(StyletPlugin* self, const GdkEvent* event,
 
   g_autoptr(GError) error = nullptr;
   if (!fl_event_channel_send(self->event_channel, packet, nullptr, &error)) {
-    g_warning("Failed to send a Stylet event: %s", error->message);
+    g_warning("Failed to send a Stylet event: %s",
+              error == nullptr ? "unknown error" : error->message);
+  }
+  if (is_removing) {
+    update_gdk_tool(self, event, identifier, phase);
   }
 
   if (strcmp(phase, "up") == 0 || strcmp(phase, "cancel") == 0 ||
@@ -279,6 +524,9 @@ static void send_motion(StyletPlugin* self, const GdkEvent* event,
 static gboolean motion_event_cb(GtkWidget* /*widget*/, GdkEventMotion* event,
                                 gpointer user_data) {
   StyletPlugin* self = STYLET_PLUGIN(user_data);
+  if (uses_wayland_backend(self)) {
+    return FALSE;
+  }
   const gboolean is_down = (event->state & GDK_BUTTON1_MASK) != 0;
   send_motion(self, reinterpret_cast<GdkEvent*>(event),
               is_down ? "move" : "hover", event->x, event->y, event->state,
@@ -290,6 +538,9 @@ static gboolean motion_event_cb(GtkWidget* /*widget*/, GdkEventMotion* event,
 static gboolean button_event_cb(GtkWidget* /*widget*/, GdkEventButton* event,
                                 gpointer user_data) {
   StyletPlugin* self = STYLET_PLUGIN(user_data);
+  if (uses_wayland_backend(self)) {
+    return FALSE;
+  }
   const gboolean pressed = event->type == GDK_BUTTON_PRESS;
   guint state = event->state;
   if (event->button == 1 && pressed) {
@@ -318,11 +569,105 @@ static gboolean button_event_cb(GtkWidget* /*widget*/, GdkEventButton* event,
 static gboolean proximity_event_cb(GtkWidget* /*widget*/, GdkEventProximity* event,
                                    gpointer user_data) {
   StyletPlugin* self = STYLET_PLUGIN(user_data);
+  if (uses_wayland_backend(self)) {
+    return FALSE;
+  }
   const gchar* phase =
       event->type == GDK_PROXIMITY_IN ? "added" : "removed";
   send_motion(self, reinterpret_cast<GdkEvent*>(event), phase,
               self->has_last_position ? self->last_x : 0.0,
               self->has_last_position ? self->last_y : 0.0, 0, FALSE);
+  return FALSE;
+}
+
+/** Announces a GTK tablet pad or expands its known control description. */
+static GdkDeviceState* update_gdk_pad(StyletPlugin* self,
+                                      const GdkEvent* event,
+                                      const gchar* identifier,
+                                      guint feature, guint button_count) {
+  GdkDeviceState* state = static_cast<GdkDeviceState*>(
+      g_hash_table_lookup(self->announced_devices, identifier));
+  const gboolean is_new = state == nullptr;
+  if (is_new) {
+    state = g_new0(GdkDeviceState, 1);
+    g_hash_table_insert(self->announced_devices, g_strdup(identifier), state);
+  }
+  const gboolean changed =
+      (feature & ~state->features) != 0 || button_count > state->button_count;
+  state->features |= feature;
+  state->button_count = MAX(state->button_count, button_count);
+  if (is_new || changed) {
+    send_gdk_device_packet(self, event, is_new ? "added" : "changed", "pad",
+                           identifier, nullptr, state);
+  }
+  return state;
+}
+
+/** Sends one GTK graphics-tablet pad control packet. */
+static void send_gdk_pad_packet(StyletPlugin* self, const GdkEvent* event,
+                                const gchar* identifier, const gchar* control,
+                                guint index, const gchar* phase,
+                                const gdouble* value, guint mode) {
+  g_autoptr(FlValue) packet = fl_value_new_map();
+  fl_value_set_string_take(packet, "type", fl_value_new_string("pad"));
+  fl_value_set_string_take(
+      packet, "timestampMicros",
+      fl_value_new_int(static_cast<gint64>(gdk_event_get_time(event)) * 1000));
+  fl_value_set_string_take(packet, "nativeDeviceIdentifier",
+                           fl_value_new_string(identifier));
+  fl_value_set_string_take(packet, "control", fl_value_new_string(control));
+  fl_value_set_string_take(packet, "controlIndex",
+                           fl_value_new_int(static_cast<gint64>(index)));
+  fl_value_set_string_take(packet, "phase", fl_value_new_string(phase));
+  if (value != nullptr) {
+    set_float(packet, "value", CLAMP(*value, 0.0, 1.0));
+  }
+  fl_value_set_string_take(packet, "mode",
+                           fl_value_new_int(static_cast<gint64>(mode)));
+  g_autoptr(GError) error = nullptr;
+  if (!fl_event_channel_send(self->event_channel, packet, nullptr, &error)) {
+    g_warning("Failed to send a Stylet tablet-pad event: %s",
+              error == nullptr ? "unknown error" : error->message);
+  }
+}
+
+/** Observes GTK tablet-pad events without consuming them. */
+static gboolean pad_event_cb(GtkWidget* /*widget*/, GdkEvent* event,
+                             gpointer user_data) {
+  StyletPlugin* self = STYLET_PLUGIN(user_data);
+  if (!self->listening || uses_wayland_backend(self)) {
+    return FALSE;
+  }
+  if (event->type != GDK_PAD_BUTTON_PRESS &&
+      event->type != GDK_PAD_BUTTON_RELEASE &&
+      event->type != GDK_PAD_RING && event->type != GDK_PAD_STRIP &&
+      event->type != GDK_PAD_GROUP_MODE) {
+    return FALSE;
+  }
+
+  g_autofree gchar* identifier = native_pad_identifier(event);
+  if (event->type == GDK_PAD_BUTTON_PRESS ||
+      event->type == GDK_PAD_BUTTON_RELEASE) {
+    const GdkEventPadButton* pad = &event->pad_button;
+    update_gdk_pad(self, event, identifier, kFeaturePadButtons,
+                   pad->button + 1);
+    send_gdk_pad_packet(self, event, identifier, "button", pad->button,
+                        event->type == GDK_PAD_BUTTON_PRESS ? "began" : "ended",
+                        nullptr, pad->mode);
+  } else if (event->type == GDK_PAD_RING || event->type == GDK_PAD_STRIP) {
+    const GdkEventPadAxis* pad = &event->pad_axis;
+    const gboolean is_ring = event->type == GDK_PAD_RING;
+    update_gdk_pad(self, event, identifier,
+                   is_ring ? kFeaturePadRing : kFeaturePadStrip, 0);
+    send_gdk_pad_packet(self, event, identifier,
+                        is_ring ? "ring" : "strip", pad->index, "changed",
+                        &pad->value, pad->mode);
+  } else {
+    const GdkEventPadGroupMode* pad = &event->pad_group_mode;
+    update_gdk_pad(self, event, identifier, 0, 0);
+    send_gdk_pad_packet(self, event, identifier, "mode", pad->group,
+                        "discrete", nullptr, pad->mode);
+  }
   return FALSE;
 }
 
@@ -332,6 +677,11 @@ static FlMethodErrorResponse* listen_cb(FlEventChannel* /*channel*/,
                                         gpointer user_data) {
   StyletPlugin* self = STYLET_PLUGIN(user_data);
   self->listening = TRUE;
+#ifdef STYLET_HAS_WAYLAND
+  if (self->wayland_backend != nullptr) {
+    stylet_wayland_backend_start(self->wayland_backend);
+  }
+#endif
   return nullptr;
 }
 
@@ -342,6 +692,10 @@ static FlMethodErrorResponse* cancel_cb(FlEventChannel* /*channel*/,
   StyletPlugin* self = STYLET_PLUGIN(user_data);
   self->listening = FALSE;
   self->has_last_position = FALSE;
+  g_hash_table_remove_all(self->announced_devices);
+#ifdef STYLET_HAS_WAYLAND
+  stylet_wayland_backend_stop(self->wayland_backend);
+#endif
   return nullptr;
 }
 
@@ -350,7 +704,12 @@ FlMethodResponse* stylet_get_capabilities() {
       "pressure",          "tilt",           "orientation",
       "distance",          "barrelRotation", "tangentialPressure",
       "primaryButton",     "secondaryButton", "eraser",
-      "hover",             nullptr,
+      "hover",             "deviceInfo",     "tabletPadButtons",
+      "tabletPadRing",     "tabletPadStrip",
+#ifdef STYLET_HAS_WAYLAND
+      "wheel",             "tabletPadDial",
+#endif
+      nullptr,
   };
   g_autoptr(FlValue) result = fl_value_new_list_from_strv(features);
   return FL_METHOD_RESPONSE(fl_method_success_response_new(result));
@@ -386,11 +745,17 @@ static void disconnect_handler(gpointer instance, gulong* handler) {
 /** Releases channels, the retained view, and every GTK signal handler. */
 static void stylet_plugin_dispose(GObject* object) {
   StyletPlugin* self = STYLET_PLUGIN(object);
+#ifdef STYLET_HAS_WAYLAND
+  stylet_wayland_backend_free(self->wayland_backend);
+  self->wayland_backend = nullptr;
+#endif
   disconnect_handler(self->view, &self->motion_handler);
   disconnect_handler(self->view, &self->button_press_handler);
   disconnect_handler(self->view, &self->button_release_handler);
   disconnect_handler(self->view, &self->proximity_in_handler);
   disconnect_handler(self->view, &self->proximity_out_handler);
+  disconnect_handler(self->view, &self->pad_event_handler);
+  g_clear_pointer(&self->announced_devices, g_hash_table_unref);
   g_clear_object(&self->view);
   g_clear_object(&self->method_channel);
   g_clear_object(&self->event_channel);
@@ -403,7 +768,10 @@ static void stylet_plugin_class_init(StyletPluginClass* klass) {
 }
 
 /** Initializes nullable handles and correlation state. */
-static void stylet_plugin_init(StyletPlugin* /*self*/) {}
+static void stylet_plugin_init(StyletPlugin* self) {
+  self->announced_devices =
+      g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+}
 
 void stylet_plugin_register_with_registrar(FlPluginRegistrar* registrar) {
   StyletPlugin* plugin =
@@ -427,11 +795,17 @@ void stylet_plugin_register_with_registrar(FlPluginRegistrar* registrar) {
   FlView* view = fl_plugin_registrar_get_view(registrar);
   if (view != nullptr) {
     plugin->view = FL_VIEW(g_object_ref(view));
+#ifdef STYLET_HAS_WAYLAND
+    plugin->wayland_backend =
+        stylet_wayland_backend_new(GTK_WIDGET(view), plugin->event_channel);
+#endif
     gtk_widget_add_events(
         GTK_WIDGET(view),
         GDK_POINTER_MOTION_MASK | GDK_BUTTON_PRESS_MASK |
             GDK_BUTTON_RELEASE_MASK | GDK_PROXIMITY_IN_MASK |
-            GDK_PROXIMITY_OUT_MASK);
+            GDK_PROXIMITY_OUT_MASK | GDK_TABLET_PAD_MASK);
+    plugin->pad_event_handler =
+        g_signal_connect(view, "event", G_CALLBACK(pad_event_cb), plugin);
     plugin->motion_handler =
         g_signal_connect(view, "motion-notify-event", G_CALLBACK(motion_event_cb),
                          plugin);

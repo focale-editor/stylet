@@ -30,6 +30,26 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   /// Tablet tool identifier associated with `lastPosition`.
   private var lastPointingDeviceIdentifier: Int?
 
+  /// Native tool identifiers announced during the current subscription.
+  private var announcedDevices: Set<String> = []
+
+  /// Mouse-coalescing state restored when high-rate observation stops.
+  private var previousMouseCoalescingState: Bool?
+
+  /// Features supplied for every AppKit tablet-tool description.
+  private static let deviceFeatureNames: [String] = [
+    "pressure",
+    "tilt",
+    "orientation",
+    "barrelRotation",
+    "tangentialPressure",
+    "primaryButton",
+    "secondaryButton",
+    "eraser",
+    "hover",
+    "deviceInfo",
+  ]
+
   /// Creates a channel backend associated with Flutter's rendering view.
   private init(binaryMessenger: FlutterBinaryMessenger, view: NSView?) {
     methodChannel = FlutterMethodChannel(
@@ -75,6 +95,7 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
       "secondaryButton",
       "eraser",
       "hover",
+      "deviceInfo",
     ])
   }
 
@@ -118,6 +139,8 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
       self?.observe(event: event)
       return event
     }
+    previousMouseCoalescingState = NSEvent.isMouseCoalescingEnabled
+    NSEvent.isMouseCoalescingEnabled = false
   }
 
   /// Removes the AppKit event monitor and clears correlation state.
@@ -126,8 +149,13 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
       NSEvent.removeMonitor(eventMonitor)
     }
     eventMonitor = nil
+    if let previousMouseCoalescingState {
+      NSEvent.isMouseCoalescingEnabled = previousMouseCoalescingState
+    }
+    previousMouseCoalescingState = nil
     lastPosition = nil
     lastPointingDeviceIdentifier = nil
+    announcedDevices.removeAll()
   }
 
   /// Filters one AppKit event and emits it when it belongs to a tablet tool.
@@ -154,6 +182,8 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     let isDown = tipIsDown(for: event)
     let phase = phaseName(for: event, isProximity: isProximity, isDown: isDown)
     let tool = event.pointingDeviceType == .eraser ? "eraser" : "pen"
+    let identifier = nativeIdentifier(for: event)
+    announceDeviceIfNeeded(event: event, identifier: identifier, tool: tool)
     var packet: [String: Any] = [
       "type": "motion",
       "timestampMicros": Int64((event.timestamp * 1_000_000).rounded()),
@@ -161,24 +191,14 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
       "tool": tool,
       "pointerIdentifier": pointingDeviceIdentifier,
       "deviceIdentifier": event.deviceID,
-      "nativeDeviceIdentifier": nativeIdentifier(for: event),
+      "nativeDeviceIdentifier": identifier,
       "x": Double(position.x),
       "y": Double(position.y),
       "deltaX": Double(position.x - previousPosition.x),
       "deltaY": Double(position.y - previousPosition.y),
       "buttons": flutterButtons(for: event, isDown: isDown),
       "isDown": isDown,
-      "features": [
-        "pressure",
-        "tilt",
-        "orientation",
-        "barrelRotation",
-        "tangentialPressure",
-        "primaryButton",
-        "secondaryButton",
-        "eraser",
-        "hover",
-      ],
+      "features": Self.deviceFeatureNames,
     ]
 
     if !isProximity {
@@ -196,12 +216,59 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     eventSink(packet)
 
     if phase == "removed" {
+      sendDeviceChange(
+        event: event,
+        identifier: identifier,
+        tool: tool,
+        phase: "removed"
+      )
+      announcedDevices.remove(identifier)
       lastPosition = nil
       lastPointingDeviceIdentifier = nil
     } else {
       lastPosition = position
       lastPointingDeviceIdentifier = pointingDeviceIdentifier
     }
+  }
+
+  /// Announces a native tablet tool before its first motion sample.
+  private func announceDeviceIfNeeded(event: NSEvent, identifier: String, tool: String) {
+    guard announcedDevices.insert(identifier).inserted else {
+      return
+    }
+    sendDeviceChange(event: event, identifier: identifier, tool: tool, phase: "added")
+  }
+
+  /// Emits metadata or a connection change for one AppKit tablet tool.
+  private func sendDeviceChange(
+    event: NSEvent,
+    identifier: String,
+    tool: String,
+    phase: String
+  ) {
+    guard let eventSink else {
+      return
+    }
+    var packet: [String: Any] = [
+      "type": "device",
+      "timestampMicros": Int64((event.timestamp * 1_000_000).rounded()),
+      "phase": phase,
+      "kind": "tool",
+      "nativeDeviceIdentifier": identifier,
+      "tool": tool,
+      "buttonCount": 2,
+      "features": Self.deviceFeatureNames,
+    ]
+    let isProximity = event.type == .tabletProximity || event.subtype == .tabletProximity
+    if isProximity {
+      if event.vendorID > 0 {
+        packet["vendorIdentifier"] = event.vendorID
+      }
+      if event.tabletID > 0 {
+        packet["productIdentifier"] = event.tabletID
+      }
+    }
+    eventSink(packet)
   }
 
   /// Whether an AppKit event carries tablet point or proximity data.

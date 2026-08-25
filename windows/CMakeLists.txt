@@ -20,6 +20,8 @@ set(PLUGIN_NAME "stylet_plugin")
 list(APPEND PLUGIN_SOURCES
   "stylet_plugin.cpp"
   "stylet_plugin.h"
+  "stylet_wintab.cpp"
+  "stylet_wintab.h"
 )
 
 # Define the plugin library target. Its name must not be changed (see comment

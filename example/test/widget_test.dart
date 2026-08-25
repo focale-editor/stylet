@@ -9,5 +9,7 @@ void main() {
     expect(find.text('Stylet input laboratory'), findsOneWidget);
     expect(find.text('Pressure'), findsOneWidget);
     expect(find.text('Barrel'), findsOneWidget);
+    expect(find.text('Devices'), findsOneWidget);
+    expect(find.text('Pad event'), findsOneWidget);
   });
 }

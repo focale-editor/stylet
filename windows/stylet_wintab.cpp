@@ -1,0 +1,433 @@
+#include "stylet_wintab.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <deque>
+#include <limits>
+#include <memory>
+#include <utility>
+
+namespace stylet {
+namespace {
+
+/** Private Wintab declarations needed for runtime dynamic linking. */
+namespace wintab {
+
+/** Opaque tag used by Wintab context handles. */
+struct ContextTag;
+
+/** Handle identifying one application-owned Wintab context. */
+using Context = ContextTag*;
+
+/** Bit field selecting values stored in each Wintab packet. */
+using PacketMask = DWORD;
+
+/** Fixed-point value used by Wintab axis descriptions. */
+using Fixed = DWORD;
+
+/** Default Wintab message base reserved by the API specification. */
+constexpr UINT kMessageBase = 0x7FF0;
+
+/** Message sent when a packet is ready in the context queue. */
+constexpr UINT kPacketMessage = kMessageBase;
+
+/** Category containing the default screen-coordinate context. */
+constexpr UINT kDefaultSystemContext = 4;
+
+/** Base category containing one entry per physical tablet. */
+constexpr UINT kDevices = 100;
+
+/** Device property describing the tangential-pressure axis. */
+constexpr UINT kTangentialPressure = 16;
+
+/** Context option requesting window-message notifications. */
+constexpr UINT kMessages = 0x0004;
+
+/** Packet field containing the reporting context. */
+constexpr PacketMask kContext = 0x0001;
+
+/** Packet field containing the driver millisecond timestamp. */
+constexpr PacketMask kTime = 0x0004;
+
+/** Packet field containing the tablet cursor index. */
+constexpr PacketMask kCursor = 0x0020;
+
+/** Packet field containing absolute tangential pressure. */
+constexpr PacketMask kTangentialPressureData = 0x0800;
+
+/** Exact packet layout requested from the dynamically loaded driver. */
+constexpr PacketMask kPacketData =
+    kContext | kTime | kCursor | kTangentialPressureData;
+
+/** Number of characters reserved for a Wintab context name. */
+constexpr size_t kContextNameLength = 40;
+
+/** Largest number of driver packets removed in one queue operation. */
+constexpr int kPacketBatchSize = 128;
+
+/** Largest cached timestamp difference accepted for Windows Ink enrichment. */
+constexpr int64_t kMaximumMatchAgeMillis = 24;
+
+/** Minimum and maximum values reported by one tablet axis. */
+struct Axis {
+  /** Smallest raw axis value. */
+  LONG minimum;
+
+  /** Largest raw axis value. */
+  LONG maximum;
+
+  /** Physical-unit identifier defined by Wintab. */
+  UINT units;
+
+  /** Fixed-point resolution expressed in increments per physical unit. */
+  Fixed resolution;
+};
+
+/** ANSI Wintab context layout used by WTInfoA and WTOpenA. */
+struct LogContext {
+  /** Human-readable private context name. */
+  char name[kContextNameLength];
+
+  /** Context option bit field. */
+  UINT options;
+
+  /** Current context status bit field. */
+  UINT status;
+
+  /** Context attribute locks. */
+  UINT locks;
+
+  /** First message identifier reserved for this context. */
+  UINT message_base;
+
+  /** Device index selected by the default context. */
+  UINT device;
+
+  /** Requested packet rate. */
+  UINT packet_rate;
+
+  /** Fields requested in each packet. */
+  PacketMask packet_data;
+
+  /** Fields interpreted as relative values. */
+  PacketMask packet_mode;
+
+  /** Fields whose changes produce motion packets. */
+  PacketMask move_mask;
+
+  /** Buttons whose presses produce packets. */
+  DWORD button_down_mask;
+
+  /** Buttons whose releases produce packets. */
+  DWORD button_up_mask;
+
+  /** Horizontal input origin. */
+  LONG input_origin_x;
+
+  /** Vertical input origin. */
+  LONG input_origin_y;
+
+  /** Depth input origin. */
+  LONG input_origin_z;
+
+  /** Horizontal input extent. */
+  LONG input_extent_x;
+
+  /** Vertical input extent. */
+  LONG input_extent_y;
+
+  /** Depth input extent. */
+  LONG input_extent_z;
+
+  /** Horizontal output origin. */
+  LONG output_origin_x;
+
+  /** Vertical output origin. */
+  LONG output_origin_y;
+
+  /** Depth output origin. */
+  LONG output_origin_z;
+
+  /** Horizontal output extent. */
+  LONG output_extent_x;
+
+  /** Vertical output extent. */
+  LONG output_extent_y;
+
+  /** Depth output extent. */
+  LONG output_extent_z;
+
+  /** Horizontal sensitivity. */
+  Fixed sensitivity_x;
+
+  /** Vertical sensitivity. */
+  Fixed sensitivity_y;
+
+  /** Depth sensitivity. */
+  Fixed sensitivity_z;
+
+  /** Whether the context uses the system cursor mapping. */
+  BOOL system_mode;
+
+  /** Horizontal system mapping origin. */
+  int system_origin_x;
+
+  /** Vertical system mapping origin. */
+  int system_origin_y;
+
+  /** Horizontal system mapping extent. */
+  int system_extent_x;
+
+  /** Vertical system mapping extent. */
+  int system_extent_y;
+
+  /** Horizontal system mapping sensitivity. */
+  Fixed system_sensitivity_x;
+
+  /** Vertical system mapping sensitivity. */
+  Fixed system_sensitivity_y;
+};
+
+/** Compact packet layout generated by the selected packet-data mask. */
+struct Packet {
+  /** Context that generated the packet. */
+  Context context;
+
+  /** Millisecond timestamp using the Windows input clock. */
+  DWORD time;
+
+  /** Driver cursor index. */
+  UINT cursor;
+
+  /** Absolute raw tangential-pressure value. */
+  UINT tangential_pressure;
+};
+
+// Guard the hand-declared ABI against accidental field or alignment changes.
+static_assert(sizeof(Axis) == 16, "Unexpected Wintab AXIS layout.");
+static_assert(sizeof(LogContext) == 172,
+              "Unexpected Wintab LOGCONTEXTA layout.");
+static_assert(sizeof(Packet) == (sizeof(void*) == 8 ? 24 : 16),
+              "Unexpected Wintab PACKET layout.");
+
+/** Signature of the dynamically loaded WTInfoA entry point. */
+using InfoFunction = UINT(WINAPI*)(UINT category, UINT index, LPVOID output);
+
+/** Signature of the dynamically loaded WTOpenA entry point. */
+using OpenFunction = Context(WINAPI*)(HWND window, LogContext* context,
+                                      BOOL enable);
+
+/** Signature of the dynamically loaded WTClose entry point. */
+using CloseFunction = BOOL(WINAPI*)(Context context);
+
+/** Signature of the dynamically loaded WTPacketsGet entry point. */
+using PacketsGetFunction = int(WINAPI*)(Context context, int maximum_count,
+                                        LPVOID packets);
+
+}  // namespace wintab
+
+/** Adds one value to a standard-codec map with a UTF-8 key. */
+void SetValue(flutter::EncodableMap* map, const char* key,
+              flutter::EncodableValue value) {
+  (*map)[flutter::EncodableValue(key)] = std::move(value);
+}
+
+/** Returns the shortest signed difference between two wrapping DWORD clocks. */
+int64_t TimestampDifference(DWORD left, DWORD right) {
+  return static_cast<int64_t>(static_cast<int32_t>(left - right));
+}
+
+}  // namespace
+
+/** Owns dynamically resolved Wintab functions, context, and cached samples. */
+class WintabBackend::Implementation {
+ private:
+  /** Driver DLL loaded from the Windows system directory. */
+  HMODULE module_ = nullptr;
+
+  /** Private message-producing Wintab context. */
+  wintab::Context context_ = nullptr;
+
+  /** Dynamically resolved WTInfoA function. */
+  wintab::InfoFunction info_ = nullptr;
+
+  /** Dynamically resolved WTOpenA function. */
+  wintab::OpenFunction open_ = nullptr;
+
+  /** Dynamically resolved WTClose function. */
+  wintab::CloseFunction close_ = nullptr;
+
+  /** Dynamically resolved WTPacketsGet function. */
+  wintab::PacketsGetFunction packets_get_ = nullptr;
+
+  /** Driver-reported tangential-pressure range. */
+  wintab::Axis tangential_pressure_axis_ = {};
+
+  /** Recent Wintab samples waiting to enrich Windows Ink packets. */
+  std::deque<wintab::Packet> samples_;
+
+ public:
+  /** Loads Wintab and opens a context associated with [window]. */
+  explicit Implementation(HWND window) { Initialize(window); }
+
+  /** Closes the Wintab context before unloading its function pointers. */
+  ~Implementation() {
+    if (context_ != nullptr && close_ != nullptr) {
+      close_(context_);
+    }
+    if (module_ != nullptr) {
+      FreeLibrary(module_);
+    }
+  }
+
+  /** Whether a usable driver context is currently open. */
+  bool is_available() const { return context_ != nullptr; }
+
+  /** Drains Wintab packets from the message-owning context into the cache. */
+  bool HandleWindowMessage(UINT message, LPARAM lparam) {
+    if (message != wintab::kPacketMessage || context_ == nullptr ||
+        reinterpret_cast<wintab::Context>(lparam) != context_) {
+      return false;
+    }
+    DrainPackets();
+    return true;
+  }
+
+  /** Adds the closest driver's tangential pressure to a Windows Ink packet. */
+  void EnrichPacket(DWORD timestamp_millis, flutter::EncodableMap* packet,
+                    flutter::EncodableList* features) {
+    DrainPackets();
+    size_t closest_index = samples_.size();
+    int64_t closest_age = std::numeric_limits<int64_t>::max();
+    for (size_t index = 0; index < samples_.size(); ++index) {
+      const int64_t age =
+          std::abs(TimestampDifference(samples_[index].time, timestamp_millis));
+      if (age < closest_age) {
+        closest_index = index;
+        closest_age = age;
+      }
+    }
+    if (closest_index == samples_.size() ||
+        closest_age > wintab::kMaximumMatchAgeMillis) {
+      return;
+    }
+    const UINT tangential_pressure =
+        samples_[closest_index].tangential_pressure;
+    for (size_t index = 0; index <= closest_index; ++index) {
+      samples_.pop_front();
+    }
+
+    const double minimum = tangential_pressure_axis_.minimum;
+    const double extent =
+        static_cast<double>(tangential_pressure_axis_.maximum) -
+        static_cast<double>(tangential_pressure_axis_.minimum);
+    if (extent <= 0) {
+      return;
+    }
+    const double normalized = std::clamp(
+        ((static_cast<double>(tangential_pressure) - minimum) /
+             extent) *
+                2.0 -
+            1.0,
+        -1.0, 1.0);
+    SetValue(packet, "tangentialPressure",
+             flutter::EncodableValue(normalized));
+    features->emplace_back("tangentialPressure");
+  }
+
+  /** Removes every cached and driver-queued Wintab packet. */
+  void ClearSamples() {
+    DrainPackets();
+    samples_.clear();
+  }
+
+ private:
+  /** Removes currently queued packets from the driver and bounds the cache. */
+  void DrainPackets() {
+    if (context_ == nullptr || packets_get_ == nullptr) {
+      return;
+    }
+    wintab::Packet packets[wintab::kPacketBatchSize] = {};
+    const int count = packets_get_(context_, wintab::kPacketBatchSize, packets);
+    if (count <= 0) {
+      return;
+    }
+    samples_.insert(samples_.end(), packets, packets + count);
+    while (samples_.size() > wintab::kPacketBatchSize) {
+      samples_.pop_front();
+    }
+  }
+
+  /** Loads required symbols, reads axis metadata, and opens the context. */
+  void Initialize(HWND window) {
+    if (window == nullptr) {
+      return;
+    }
+    module_ = LoadLibraryExW(L"Wintab32.dll", nullptr,
+                             LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (module_ == nullptr) {
+      return;
+    }
+    info_ = reinterpret_cast<wintab::InfoFunction>(
+        GetProcAddress(module_, "WTInfoA"));
+    open_ = reinterpret_cast<wintab::OpenFunction>(
+        GetProcAddress(module_, "WTOpenA"));
+    close_ = reinterpret_cast<wintab::CloseFunction>(
+        GetProcAddress(module_, "WTClose"));
+    packets_get_ = reinterpret_cast<wintab::PacketsGetFunction>(
+        GetProcAddress(module_, "WTPacketsGet"));
+    if (info_ == nullptr || open_ == nullptr || close_ == nullptr ||
+        packets_get_ == nullptr || info_(0, 0, nullptr) == 0) {
+      return;
+    }
+
+    wintab::LogContext context = {};
+    if (info_(wintab::kDefaultSystemContext, 0, &context) !=
+        static_cast<UINT>(sizeof(context))) {
+      return;
+    }
+    const UINT device =
+        context.device == std::numeric_limits<UINT>::max() ? 0 : context.device;
+    if (info_(wintab::kDevices + device, wintab::kTangentialPressure,
+              &tangential_pressure_axis_) !=
+            static_cast<UINT>(sizeof(tangential_pressure_axis_)) ||
+        tangential_pressure_axis_.maximum <=
+            tangential_pressure_axis_.minimum) {
+      return;
+    }
+
+    context.options |= wintab::kMessages;
+    context.message_base = wintab::kMessageBase;
+    context.packet_data = wintab::kPacketData;
+    context.packet_mode = 0;
+    context.move_mask = wintab::kPacketData;
+    context_ = open_(window, &context, TRUE);
+  }
+};
+
+WintabBackend::WintabBackend(HWND window)
+    : implementation_(std::make_unique<Implementation>(window)) {}
+
+WintabBackend::~WintabBackend() = default;
+
+bool WintabBackend::supports_tangential_pressure() const {
+  return implementation_->is_available();
+}
+
+bool WintabBackend::HandleWindowMessage(UINT message, WPARAM /*wparam*/,
+                                        LPARAM lparam) {
+  return implementation_->HandleWindowMessage(message, lparam);
+}
+
+void WintabBackend::EnrichPacket(DWORD timestamp_millis,
+                                 flutter::EncodableMap* packet,
+                                 flutter::EncodableList* features) {
+  implementation_->EnrichPacket(timestamp_millis, packet, features);
+}
+
+void WintabBackend::ClearSamples() { implementation_->ClearSamples(); }
+
+}  // namespace stylet

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -55,10 +56,31 @@ class _StylusLaboratoryState extends State<_StylusLaboratory> {
   /// Platform features resolved asynchronously after startup.
   StylusCapabilities? _capabilities;
 
+  /// Subscription that refreshes native device telemetry.
+  StreamSubscription<StylusDeviceEvent>? _deviceSubscription;
+
+  /// Subscription that refreshes graphics-tablet pad telemetry.
+  StreamSubscription<TabletPadEvent>? _padSubscription;
+
+  /// Latest native device connection or metadata change.
+  StylusDeviceEvent? _deviceEvent;
+
+  /// Latest graphics-tablet pad control change.
+  TabletPadEvent? _padEvent;
+
   @override
   void initState() {
     super.initState();
+    _deviceSubscription = _stylet.deviceEvents.listen(_handleDeviceEvent);
+    _padSubscription = _stylet.padEvents.listen(_handlePadEvent);
     _loadCapabilities();
+  }
+
+  @override
+  void dispose() {
+    unawaited(_deviceSubscription?.cancel());
+    unawaited(_padSubscription?.cancel());
+    super.dispose();
   }
 
   @override
@@ -105,7 +127,13 @@ class _StylusLaboratoryState extends State<_StylusLaboratory> {
               ),
             ),
             const SizedBox(height: 12),
-            _TelemetryPanel(motion: _motion, action: _action),
+            _TelemetryPanel(
+              motion: _motion,
+              action: _action,
+              deviceEvent: _deviceEvent,
+              padEvent: _padEvent,
+              deviceCount: _stylet.connectedDevices.length,
+            ),
           ],
         ),
       ),
@@ -139,6 +167,14 @@ class _StylusLaboratoryState extends State<_StylusLaboratory> {
   /// Stores the latest stylus body interaction for inspection.
   void _handleAction(StylusActionEvent event) =>
       setState(() => _action = event);
+
+  /// Stores the latest native device change for inspection.
+  void _handleDeviceEvent(StylusDeviceEvent event) =>
+      setState(() => _deviceEvent = event);
+
+  /// Stores the latest graphics-tablet control event for inspection.
+  void _handlePadEvent(TabletPadEvent event) =>
+      setState(() => _padEvent = event);
 }
 
 /// Displays the advanced features offered by the current backend.
@@ -174,8 +210,23 @@ class _TelemetryPanel extends StatelessWidget {
   /// Latest stylus body interaction.
   final StylusActionEvent? action;
 
+  /// Latest native device connection or metadata change.
+  final StylusDeviceEvent? deviceEvent;
+
+  /// Latest graphics-tablet pad control change.
+  final TabletPadEvent? padEvent;
+
+  /// Number of native devices currently tracked by the controller.
+  final int deviceCount;
+
   /// Creates a telemetry panel from optional live data.
-  const _TelemetryPanel({required this.motion, required this.action});
+  const _TelemetryPanel({
+    required this.motion,
+    required this.action,
+    required this.deviceEvent,
+    required this.padEvent,
+    required this.deviceCount,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -206,6 +257,7 @@ class _TelemetryPanel extends StatelessWidget {
               label: 'Barrel',
               value: _formatDegrees(sample?.barrelRotation),
             ),
+            _Metric(label: 'Wheel', value: _formatDegrees(sample?.wheelDelta)),
             _Metric(
               label: 'Button 1',
               value: sample?.isSideButtonPressed(number: 1) ?? false
@@ -213,6 +265,12 @@ class _TelemetryPanel extends StatelessWidget {
                   : 'up',
             ),
             _Metric(label: 'Action', value: actionLabel),
+            _Metric(label: 'Devices', value: deviceCount.toString()),
+            _Metric(
+              label: 'Device event',
+              value: _formatDeviceEvent(deviceEvent),
+            ),
+            _Metric(label: 'Pad event', value: _formatPadEvent(padEvent)),
           ],
         ),
       ),
@@ -308,3 +366,24 @@ String _formatNumber(double? value) =>
 /// Formats an optional radian angle as degrees for telemetry.
 String _formatDegrees(double? radians) =>
     radians == null ? '—' : '${(radians * 180 / math.pi).toStringAsFixed(1)}°';
+
+/// Formats an optional native device change for compact telemetry.
+String _formatDeviceEvent(StylusDeviceEvent? event) {
+  if (event == null) {
+    return '—';
+  }
+  final String label = event.device.name ?? event.device.identifier;
+  return '${event.phase.name} · $label';
+}
+
+/// Formats an optional graphics-tablet pad event for compact telemetry.
+String _formatPadEvent(TabletPadEvent? event) {
+  if (event == null) {
+    return '—';
+  }
+  final double? rawValue = event.value;
+  final String value = rawValue == null
+      ? ''
+      : ' · ${rawValue.toStringAsFixed(3)}';
+  return '${event.control.name}[${event.controlIndex}] · ${event.phase.name}$value';
+}

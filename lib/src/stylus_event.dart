@@ -159,6 +159,9 @@ final class StylusMotionEvent extends StyletEvent {
   /// Tangential pressure in the normalized range from -1 to 1.
   final double? tangentialPressure;
 
+  /// Signed relative stylus-wheel movement in radians.
+  final double? wheelDelta;
+
   /// Features known to be represented or supported by this sample.
   final Set<StylusFeature> features;
 
@@ -191,6 +194,7 @@ final class StylusMotionEvent extends StyletEvent {
     this.tiltY,
     this.barrelRotation,
     this.tangentialPressure,
+    this.wheelDelta,
     this.features = const {},
     this.originalEvent,
   });
@@ -224,6 +228,7 @@ final class StylusMotionEvent extends StyletEvent {
       tiltY: enhancement?.tiltY,
       barrelRotation: enhancement?.barrelRotation,
       tangentialPressure: enhancement?.tangentialPressure,
+      wheelDelta: enhancement?.wheelDelta,
       features: Set.unmodifiable(features),
       originalEvent: event,
     );
@@ -314,6 +319,192 @@ final class StylusActionEvent extends StyletEvent {
 
   @override
   String toString() => 'StylusActionEvent(action: ${action.name}, phase: ${phase.name}, pose: $pose)';
+}
+
+/// Identifies the native object described by a device event.
+enum StylusDeviceKind {
+  /// A complete graphics tablet or integrated digitizer.
+  tablet,
+
+  /// A pen, eraser, airbrush, or other tablet tool.
+  tool,
+
+  /// The buttons, ring, strips, and dials attached to a tablet.
+  pad,
+
+  /// A device whose more specific role is unavailable.
+  unknown,
+}
+
+/// Describes a change in a native input device's lifetime.
+enum StylusDevicePhase {
+  /// The device became available to the application.
+  added,
+
+  /// New metadata or capabilities became available for the device.
+  changed,
+
+  /// The device is no longer available to the application.
+  removed,
+}
+
+/// Describes one native tablet, tool, or tablet pad.
+@immutable
+final class StylusDevice {
+  /// Stable native identifier within the current platform session.
+  final String identifier;
+
+  /// Role played by this device in the tablet input stack.
+  final StylusDeviceKind kind;
+
+  /// Human-readable model or tool name, when available.
+  final String? name;
+
+  /// USB or platform vendor identifier, when available.
+  final int? vendorIdentifier;
+
+  /// USB or platform product identifier, when available.
+  final int? productIdentifier;
+
+  /// Physical tool kind for a [StylusDeviceKind.tool] device.
+  final StylusTool? tool;
+
+  /// Number of physical pad or tool buttons, when known.
+  final int? buttonCount;
+
+  /// Immutable features reported specifically for this device.
+  final Set<StylusFeature> features;
+
+  /// Creates a native input device description.
+  StylusDevice({
+    required this.identifier,
+    required this.kind,
+    this.name,
+    this.vendorIdentifier,
+    this.productIdentifier,
+    this.tool,
+    this.buttonCount,
+    Set<StylusFeature> features = const {},
+  }) : features = Set.unmodifiable(features);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is StylusDevice &&
+          identifier == other.identifier &&
+          kind == other.kind &&
+          name == other.name &&
+          vendorIdentifier == other.vendorIdentifier &&
+          productIdentifier == other.productIdentifier &&
+          tool == other.tool &&
+          buttonCount == other.buttonCount &&
+          setEquals(features, other.features);
+
+  @override
+  int get hashCode => Object.hash(identifier, kind, name, vendorIdentifier, productIdentifier, tool, buttonCount, Object.hashAllUnordered(features));
+
+  @override
+  String toString() => 'StylusDevice(identifier: $identifier, kind: ${kind.name}, name: $name, features: ${features.map((feature) => feature.name).join(', ')})';
+}
+
+/// A native tablet, tool, or pad connection and metadata change.
+@immutable
+final class StylusDeviceEvent extends StyletEvent {
+  /// Lifetime change represented by this event.
+  final StylusDevicePhase phase;
+
+  /// Current description of the affected device.
+  final StylusDevice device;
+
+  /// Creates a normalized native device change.
+  const StylusDeviceEvent({
+    required super.timeStamp,
+    required super.source,
+    required this.phase,
+    required this.device,
+  });
+
+  @override
+  String toString() => 'StylusDeviceEvent(phase: ${phase.name}, device: $device)';
+}
+
+/// Identifies a physical control on a graphics-tablet pad.
+enum TabletPadControl {
+  /// A momentary physical button.
+  button,
+
+  /// An absolute circular touch ring.
+  ring,
+
+  /// An absolute linear touch strip.
+  strip,
+
+  /// A relative rotary dial or wheel.
+  dial,
+
+  /// A change to the active control mapping mode.
+  mode,
+}
+
+/// Describes the lifecycle of a tablet-pad interaction.
+enum TabletPadPhase {
+  /// The user began interacting with the control.
+  began,
+
+  /// The control value changed while the interaction remained active.
+  changed,
+
+  /// The user stopped interacting with the control.
+  ended,
+
+  /// The hardware reported one atomic change without a lifecycle.
+  discrete,
+}
+
+/// A button, ring, strip, dial, or mode event from a graphics-tablet pad.
+@immutable
+final class TabletPadEvent extends StyletEvent {
+  /// Native identifier of the pad that owns the control.
+  final String deviceIdentifier;
+
+  /// Kind of physical or logical control that changed.
+  final TabletPadControl control;
+
+  /// Zero-based index of the control within the pad.
+  final int controlIndex;
+
+  /// Lifecycle stage represented by this event.
+  final TabletPadPhase phase;
+
+  /// Current normalized position or relative delta, when applicable.
+  ///
+  /// Rings and strips use the 0–1 range. Dials use signed logical detents.
+  final double? value;
+
+  /// Active mapping mode for the control group, when available.
+  final int? mode;
+
+  /// Creates a normalized graphics-tablet pad event.
+  const TabletPadEvent({
+    required super.timeStamp,
+    required super.source,
+    required this.deviceIdentifier,
+    required this.control,
+    required this.controlIndex,
+    required this.phase,
+    this.value,
+    this.mode,
+  });
+
+  /// Whether a button lifecycle phase establishes a pressed state.
+  bool? get isPressed => switch ((control, phase)) {
+    (TabletPadControl.button, TabletPadPhase.began) => true,
+    (TabletPadControl.button, TabletPadPhase.ended) => false,
+    _ => null,
+  };
+
+  @override
+  String toString() => 'TabletPadEvent(device: $deviceIdentifier, control: ${control.name}[$controlIndex], phase: ${phase.name}, value: $value, mode: $mode)';
 }
 
 /// Returns the normalized lifecycle stage for a Flutter pointer event.

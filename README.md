@@ -91,8 +91,7 @@ event received native extensions.
 Stylus body interactions are independent of pointer movement:
 
 ```dart
-final StreamSubscription<StylusActionEvent> subscription =
-    Stylet.instance.actions.listen(handleStylusAction);
+final StreamSubscription<StylusActionEvent> subscription = Stylet.instance.actions.listen(handleStylusAction);
 
 // Cancel this application-owned subscription with its lifecycle.
 await subscription.cancel();
@@ -109,6 +108,7 @@ await subscription.cancel();
 - `tiltX` and `tiltY` are optional signed components in radians;
 - barrel rotation is clockwise radians around the stylus axis;
 - tangential pressure is normalized from -1 to 1;
+- `wheelDelta` is signed relative stylus-wheel movement in radians;
 - buttons use Flutter's public button bit field; use
   `isSideButtonPressed(number: 1)` instead of hard-coded masks.
 
@@ -116,18 +116,36 @@ await subscription.cancel();
 provide. The `features` set on an individual motion sample is more precise and
 should be used when behavior depends on a value being present.
 
+Native device and tablet-pad events are available independently of motion:
+
+```dart
+final StreamSubscription<StylusDeviceEvent> devices = Stylet.instance.deviceEvents.listen(handleDeviceChange);
+final StreamSubscription<TabletPadEvent> controls = Stylet.instance.padEvents.listen(handleTabletControl);
+
+final Map<String, StylusDevice> connected = Stylet.instance.connectedDevices;
+```
+
+Cancel application-owned subscriptions with their lifecycle. Linux reports
+pad buttons, rings, strips, and mapping modes through Wayland tablet-v2 or GTK;
+relative dials require tablet-v2 version 2.
+
 ## Platform support
 
-| Feature                     | Android          | iOS/iPadOS                  | Linux             | macOS                  | Windows          |
-|-----------------------------|------------------|-----------------------------|-------------------|------------------------|------------------|
-| Pressure, tilt, orientation | Yes              | Yes                         | Yes               | Yes                    | Yes              |
-| Hover pose                  | Yes              | iPadOS 16.1+                | Yes               | Yes                    | Yes              |
-| Side buttons                | Yes              | —                           | Yes               | Yes                    | Yes              |
-| Eraser tool                 | Yes              | —                           | Yes               | Yes                    | Yes              |
-| Barrel rotation             | Driver `AXIS_RZ` | iOS 17.5+                   | GTK rotation axis | AppKit rotation        | Pen API rotation |
-| Tangential pressure         | —                | —                           | GTK slider/wheel  | AppKit barrel pressure | —                |
-| Double-tap                  | —                | Apple Pencil                | —                 | —                      | —                |
-| Squeeze                     | —                | iOS 17.5+, Apple Pencil Pro | —                 | —                      | —                |
+| Feature                     | Android          | iOS/iPadOS                  | Linux                       | macOS                  | Windows                     |
+|-----------------------------|------------------|-----------------------------|-----------------------------|------------------------|-----------------------------|
+| Pressure, tilt, orientation | Yes              | Yes                         | Yes                         | Yes                    | Yes                         |
+| Hover pose                  | Yes              | iPadOS 16.1+                | Yes                         | Yes                    | Yes                         |
+| Side buttons                | Yes              | —                           | Yes                         | Yes                    | Yes                         |
+| Eraser tool                 | Yes              | —                           | Yes                         | Yes                    | Yes                         |
+| Barrel rotation             | Driver `AXIS_RZ` | iOS 17.5+                   | GTK or tablet-v2            | AppKit rotation        | Windows Ink                 |
+| Tangential pressure         | —                | —                           | GTK or tablet-v2            | AppKit barrel pressure | Wintab driver, when present |
+| Stylus wheel                | —                | —                           | Wayland tablet-v2           | —                      | —                           |
+| High-rate sample delivery   | Flutter events   | Flutter events              | Protocol frames             | Coalescing disabled    | Windows Ink history batches |
+| Device metadata             | —                | —                           | GTK or tablet-v2            | AppKit                 | Windows Ink                 |
+| Pad buttons, rings, strips  | —                | —                           | GTK or tablet-v2            | —                      | —                           |
+| Relative pad dials          | —                | —                           | Tablet-v2 version 2         | —                      | —                           |
+| Double-tap                  | —                | Apple Pencil                | —                           | —                      | —                           |
+| Squeeze                     | —                | iOS 17.5+, Apple Pencil Pro | —                           | —                      | —                           |
 
 Hardware and tablet drivers determine whether an advertised axis produces
 meaningful values. Every backend observes input passively and returns the
@@ -141,8 +159,11 @@ toolchain.
 
 Backend maintainers can find channel names, required packet fields, units, and
 lifecycle rules in [`docs/platform_contract.md`](docs/platform_contract.md).
+Native dependencies and fallback behavior are detailed in
+[`docs/native_backends.md`](docs/native_backends.md).
 The runnable application in [`example/`](example/) visualizes capabilities,
-pressure, tilt, barrel angle, side buttons, and body actions.
+pressure, tilt, barrel angle, stylus-wheel movement, side buttons, body
+actions, native devices, and tablet-pad controls.
 
 ## Development
 

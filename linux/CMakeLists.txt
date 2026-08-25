@@ -5,16 +5,41 @@ cmake_minimum_required(VERSION 3.10)
 
 # Project-level configuration.
 set(PROJECT_NAME "stylet")
-project(${PROJECT_NAME} LANGUAGES CXX)
+project(${PROJECT_NAME} LANGUAGES C CXX)
 
 # This value is used when generating builds using this plugin, so it must
 # not be changed.
 set(PLUGIN_NAME "stylet_plugin")
 
+# Allows distributors to force the portable GTK/GDK fallback when the Flutter
+# embedder or desktop environment does not expose Wayland objects.
+option(STYLET_ENABLE_WAYLAND "Enable direct Wayland tablet-v2 support" ON)
+
+# The generated tablet protocol is bundled with the plugin, so consumers only
+# need the Wayland client library. The backend remains optional for Linux
+# distributions that build Flutter without Wayland development packages.
+find_package(PkgConfig REQUIRED)
+set(STYLET_HAS_WAYLAND FALSE)
+if(STYLET_ENABLE_WAYLAND)
+  pkg_check_modules(WAYLAND_CLIENT QUIET IMPORTED_TARGET
+    "wayland-client>=1.20"
+    gdk-wayland-3.0
+  )
+  if(WAYLAND_CLIENT_FOUND)
+    set(STYLET_HAS_WAYLAND TRUE)
+  endif()
+endif()
+
 # Any new source files that you add to the plugin should be added here.
 list(APPEND PLUGIN_SOURCES
   "stylet_plugin.cc"
 )
+if(STYLET_HAS_WAYLAND)
+  list(APPEND PLUGIN_SOURCES
+    "stylet_wayland.cc"
+    "generated/tablet-unstable-v2-protocol.c"
+  )
+endif()
 
 # Define the plugin library target. Its name must not be changed (see comment
 # on PLUGIN_NAME above).
@@ -33,6 +58,9 @@ apply_standard_settings(${PLUGIN_NAME})
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)
 target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
+if(STYLET_HAS_WAYLAND)
+  target_compile_definitions(${PLUGIN_NAME} PRIVATE STYLET_HAS_WAYLAND=1)
+endif()
 
 # Source include directories and library dependencies. Add any plugin-specific
 # dependencies here.
@@ -40,6 +68,9 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
+if(STYLET_HAS_WAYLAND)
+  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::WAYLAND_CLIENT)
+endif()
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an
@@ -85,6 +116,10 @@ apply_standard_settings(${TEST_RUNNER})
 target_include_directories(${TEST_RUNNER} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(${TEST_RUNNER} PRIVATE flutter)
 target_link_libraries(${TEST_RUNNER} PRIVATE PkgConfig::GTK)
+if(STYLET_HAS_WAYLAND)
+  target_compile_definitions(${TEST_RUNNER} PRIVATE STYLET_HAS_WAYLAND=1)
+  target_link_libraries(${TEST_RUNNER} PRIVATE PkgConfig::WAYLAND_CLIENT)
+endif()
 target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main gmock)
 
 # Enable automatic test discovery.

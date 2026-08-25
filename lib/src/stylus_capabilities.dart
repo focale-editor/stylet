@@ -20,6 +20,9 @@ enum StylusFeature {
   /// Pressure applied to a tangential control such as an airbrush wheel.
   tangentialPressure,
 
+  /// Relative rotation reported by a stylus wheel.
+  wheel,
+
   /// A primary button on the side of the stylus.
   primaryButton,
 
@@ -37,6 +40,24 @@ enum StylusFeature {
 
   /// A squeeze interaction on the stylus body.
   squeeze,
+
+  /// Multiple hardware samples delivered together without losing history.
+  historicalSamples,
+
+  /// Descriptive information and connection changes for input devices.
+  deviceInfo,
+
+  /// Physical buttons on a graphics-tablet pad.
+  tabletPadButtons,
+
+  /// A touch-sensitive ring on a graphics-tablet pad.
+  tabletPadRing,
+
+  /// A touch-sensitive strip on a graphics-tablet pad.
+  tabletPadStrip,
+
+  /// A relative dial or wheel reporting signed logical detents on a tablet pad.
+  tabletPadDial,
 }
 
 /// Describes the stylus features available through an input backend.

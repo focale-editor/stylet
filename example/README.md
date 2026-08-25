@@ -2,7 +2,8 @@
 
 An interactive stylus laboratory for the Stylet Flutter plugin. It displays
 the active backend capabilities and visualizes pressure, tilt, azimuth, barrel
-rotation, side buttons, double-tap, and squeeze events.
+rotation, stylus wheels, side buttons, double-tap, squeeze, native device
+changes, and tablet-pad controls.
 
 Run it on the current desktop or a connected device:
 

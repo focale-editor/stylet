@@ -7,10 +7,10 @@ import 'package:stylet/stylet_platform_interface.dart';
 /// Stylet backend implemented with Flutter platform channels.
 class MethodChannelStylet extends StyletPlatform {
   /// Name shared by every native method channel implementation.
-  static const String _methodChannelName = 'dev.focale.stylet/methods';
+  static const String _methodChannelName = 'app.focaleeditor.stylet/methods';
 
   /// Name shared by every native event channel implementation.
-  static const String _eventChannelName = 'dev.focale.stylet/events';
+  static const String _eventChannelName = 'app.focaleeditor.stylet/events';
 
   /// Channel used for request-response operations.
   @visibleForTesting

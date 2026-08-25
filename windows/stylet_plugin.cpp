@@ -20,10 +20,10 @@ namespace stylet {
 namespace {
 
 /** Request-response channel shared with the Dart backend. */
-constexpr char kMethodChannelName[] = "dev.focale.stylet/methods";
+constexpr char kMethodChannelName[] = "app.focaleeditor.stylet/methods";
 
 /** Continuous event channel shared with the Dart backend. */
-constexpr char kEventChannelName[] = "dev.focale.stylet/events";
+constexpr char kEventChannelName[] = "app.focaleeditor.stylet/events";
 
 /** Flutter button bit representing tip contact. */
 constexpr int64_t kFlutterPrimaryButton = 1;

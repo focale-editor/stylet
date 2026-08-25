@@ -18,10 +18,10 @@
   (G_TYPE_CHECK_INSTANCE_CAST((obj), stylet_plugin_get_type(), StyletPlugin))
 
 /** Request-response channel shared with the Dart backend. */
-static constexpr char kMethodChannelName[] = "dev.focale.stylet/methods";
+static constexpr char kMethodChannelName[] = "app.focaleeditor.stylet/methods";
 
 /** Continuous event channel shared with the Dart backend. */
-static constexpr char kEventChannelName[] = "dev.focale.stylet/events";
+static constexpr char kEventChannelName[] = "app.focaleeditor.stylet/events";
 
 /** Flutter button bit representing tip contact. */
 static constexpr gint64 kFlutterPrimaryButton = 1;

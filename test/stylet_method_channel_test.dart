@@ -9,7 +9,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   const MethodChannel methodChannel = MethodChannel(
-    'dev.focale.stylet/methods',
+    'app.focaleeditor.stylet/methods',
   );
   final TestDefaultBinaryMessenger messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;

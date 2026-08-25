@@ -1,4 +1,4 @@
-group = "dev.focale.stylet"
+group = "app.focaleeditor.stylet"
 version = "1.0-SNAPSHOT"
 
 buildscript {
@@ -26,7 +26,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.focale.stylet"
+    namespace = "app.focaleeditor.stylet"
 
     compileSdk = 36
 

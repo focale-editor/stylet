@@ -2,10 +2,10 @@ import Cocoa
 import FlutterMacOS
 
 /// Method-channel name shared with Stylet's Dart backend.
-private let methodChannelName = "dev.focale.stylet/methods"
+private let methodChannelName = "app.focaleeditor.stylet/methods"
 
 /// Event-channel name shared with Stylet's Dart backend.
-private let eventChannelName = "dev.focale.stylet/events"
+private let eventChannelName = "app.focaleeditor.stylet/events"
 
 /// macOS backend for native tablet pressure, tilt, rotation, and controls.
 public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {

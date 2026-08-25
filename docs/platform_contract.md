@@ -10,8 +10,8 @@ field meanings, units, replacement rules, and lifecycle semantics.
 
 ## Channels
 
-- Method channel: `dev.focale.stylet/methods`
-- Event channel: `dev.focale.stylet/events`
+- Method channel: `app.focaleeditor.stylet/methods`
+- Event channel: `app.focaleeditor.stylet/events`
 - Codec: Flutter standard method codec
 
 The method channel currently accepts `getCapabilities` with no arguments. A

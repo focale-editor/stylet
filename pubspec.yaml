@@ -27,7 +27,7 @@ flutter:
   plugin:
     platforms:
       android:
-        package: dev.focale.stylet
+        package: app.focaleeditor.stylet
         pluginClass: StyletPlugin
       ios:
         pluginClass: StyletPlugin

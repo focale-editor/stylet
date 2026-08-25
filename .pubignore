@@ -1,0 +1,8 @@
+test/
+doc/
+docs/
+example/
+build/
+AGENTS.md
+analysis_options.yaml
+stylet.iml

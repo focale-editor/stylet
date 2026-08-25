@@ -1,5 +1,6 @@
 test/
 doc/
+docs/
 build/
 AGENTS.md
 analysis_options.yaml

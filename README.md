@@ -213,14 +213,3 @@ Web Pointer Events and delegated ink behavior are detailed in
 The runnable application in [`example/`](example/) visualizes capabilities,
 pressure, tilt, barrel angle, stylus-wheel movement, side buttons, body
 actions, predictions, corrections, native devices, and tablet-pad controls.
-
-## Development
-
-```console
-dart format .
-dart analyze
-flutter test
-```
-
-Native compilation is additionally checked through the example application on
-each supported host platform.

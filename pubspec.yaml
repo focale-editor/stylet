@@ -1,6 +1,6 @@
 name: stylet
 description: Cross-platform Flutter stylus input with pressure, tilt, buttons, barrel rotation, hover, double-tap, and squeeze support.
-version: 0.1.0
+version: 0.1.1
 homepage: https://github.com/focale-editor/stylet
 repository: https://github.com/focale-editor/stylet
 

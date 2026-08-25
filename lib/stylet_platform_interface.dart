@@ -23,9 +23,10 @@ abstract class StyletPlatform extends PlatformInterface {
     _instance = instance;
   }
 
-  /// Every native motion, body action, device, and tablet-pad event.
+  /// Every motion, prediction, correction, body action, device, and pad event.
   Stream<StyletEvent> get events => const Stream.empty();
 
   /// Returns every feature this backend can potentially expose.
-  Future<StylusCapabilities> getCapabilities() async => StylusCapabilities.flutter;
+  Future<StylusCapabilities> getCapabilities() async =>
+      StylusCapabilities.flutter;
 }

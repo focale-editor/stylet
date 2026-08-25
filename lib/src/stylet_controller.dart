@@ -39,29 +39,53 @@ class Stylet {
   bool _isDisposed = false;
 
   /// Creates a controller backed by [platform] or the registered backend.
-  Stylet({StyletPlatform? platform}) : _platform = platform ?? StyletPlatform.instance {
+  Stylet({StyletPlatform? platform})
+    : _platform = platform ?? StyletPlatform.instance {
     final Stream<StyletEvent> platformEvents = _platform.events;
-    _events = platformEvents.isBroadcast ? platformEvents : platformEvents.asBroadcastStream();
-    _cacheSubscription = _events.listen(_rememberNativeEvent, onError: _reportPlatformError);
+    _events = platformEvents.isBroadcast
+        ? platformEvents
+        : platformEvents.asBroadcastStream();
+    _cacheSubscription = _events.listen(
+      _rememberNativeEvent,
+      onError: _reportPlatformError,
+    );
   }
 
-  /// Every motion, body action, device, and tablet-pad event from the platform.
+  /// Every motion, prediction, correction, action, device, and pad event.
   Stream<StyletEvent> get events => _events;
 
   /// Native motion samples, including axes Flutter does not expose directly.
-  Stream<StylusMotionEvent> get nativeMotions => _events.where((event) => event is StylusMotionEvent).cast<StylusMotionEvent>();
+  Stream<StylusMotionEvent> get nativeMotions => _events
+      .where((event) => event is StylusMotionEvent)
+      .cast<StylusMotionEvent>();
 
   /// Double-tap and squeeze interactions reported by supported styluses.
-  Stream<StylusActionEvent> get actions => _events.where((event) => event is StylusActionEvent).cast<StylusActionEvent>();
+  Stream<StylusActionEvent> get actions => _events
+      .where((event) => event is StylusActionEvent)
+      .cast<StylusActionEvent>();
+
+  /// Replaceable future trajectories produced by native motion prediction.
+  Stream<StylusPredictionEvent> get predictions => _events
+      .where((event) => event is StylusPredictionEvent)
+      .cast<StylusPredictionEvent>();
+
+  /// Definitive updates for native samples whose properties were estimated.
+  Stream<StylusCorrectionEvent> get corrections => _events
+      .where((event) => event is StylusCorrectionEvent)
+      .cast<StylusCorrectionEvent>();
 
   /// Native tablet, tool, and pad connection or metadata changes.
-  Stream<StylusDeviceEvent> get deviceEvents => _events.where((event) => event is StylusDeviceEvent).cast<StylusDeviceEvent>();
+  Stream<StylusDeviceEvent> get deviceEvents => _events
+      .where((event) => event is StylusDeviceEvent)
+      .cast<StylusDeviceEvent>();
 
   /// Physical graphics-tablet pad button, ring, strip, and dial input.
-  Stream<TabletPadEvent> get padEvents => _events.where((event) => event is TabletPadEvent).cast<TabletPadEvent>();
+  Stream<TabletPadEvent> get padEvents =>
+      _events.where((event) => event is TabletPadEvent).cast<TabletPadEvent>();
 
   /// Immutable snapshot of native devices currently known to this controller.
-  Map<String, StylusDevice> get connectedDevices => Map.unmodifiable(_connectedDevices);
+  Map<String, StylusDevice> get connectedDevices =>
+      Map.unmodifiable(_connectedDevices);
 
   /// Features the active platform backend can potentially provide.
   Future<StylusCapabilities> get capabilities => _platform.getCapabilities();
@@ -71,7 +95,10 @@ class Stylet {
     if (_isDisposed) {
       throw StateError('This Stylet controller has been disposed.');
     }
-    return StylusMotionEvent.fromPointerEvent(event: event, enhancement: _matchingEnhancement(event));
+    return StylusMotionEvent.fromPointerEvent(
+      event: event,
+      enhancement: _matchingEnhancement(event),
+    );
   }
 
   /// Releases this controller's native event subscription.
@@ -89,7 +116,7 @@ class Stylet {
     await subscription?.cancel();
   }
 
-  /// Retains native motions and maintains the connected-device snapshot.
+  /// Retains native motions, applies corrections, and tracks connected devices.
   void _rememberNativeEvent(StyletEvent event) {
     if (event case final StylusDeviceEvent deviceEvent) {
       if (deviceEvent.phase == StylusDevicePhase.removed) {
@@ -99,12 +126,24 @@ class Stylet {
       }
       return;
     }
+    if (event case final StylusCorrectionEvent correctionEvent) {
+      final int index = _recentNativeMotions.lastIndexWhere(
+        (motion) => motion.sampleIdentifier == correctionEvent.sampleIdentifier,
+      );
+      if (index >= 0) {
+        _recentNativeMotions[index] = correctionEvent.correctedSample;
+      }
+      return;
+    }
     if (event is! StylusMotionEvent) {
       return;
     }
     _recentNativeMotions.add(event);
     if (_recentNativeMotions.length > _maximumCachedMotions) {
-      _recentNativeMotions.removeRange(0, _recentNativeMotions.length - _maximumCachedMotions);
+      _recentNativeMotions.removeRange(
+        0,
+        _recentNativeMotions.length - _maximumCachedMotions,
+      );
     }
   }
 
@@ -132,11 +171,13 @@ class Stylet {
         continue;
       }
       final Duration difference = event.timeStamp - motion.timeStamp;
-      if (difference.inMicroseconds.abs() > _maximumEnhancementAge.inMicroseconds) {
+      if (difference.inMicroseconds.abs() >
+          _maximumEnhancementAge.inMicroseconds) {
         continue;
       }
       final Offset positionDifference = event.position - motion.position;
-      if (positionDifference.distanceSquared <= _maximumEnhancementDistanceSquared) {
+      if (positionDifference.distanceSquared <=
+          _maximumEnhancementDistanceSquared) {
         return motion;
       }
     }
@@ -144,7 +185,10 @@ class Stylet {
   }
 
   /// Whether a Flutter event and native sample can describe the same lifecycle stage.
-  bool _phasesCanMatch({required PointerEvent event, required StylusMotionEvent motion}) => switch (event) {
+  bool _phasesCanMatch({
+    required PointerEvent event,
+    required StylusMotionEvent motion,
+  }) => switch (event) {
     PointerDownEvent() => motion.phase == StylusPhase.down,
     PointerMoveEvent() => motion.phase == StylusPhase.move,
     PointerUpEvent() => motion.phase == StylusPhase.up,
@@ -155,6 +199,11 @@ class Stylet {
 
   /// Reports backend stream failures without terminating independent consumers.
   void _reportPlatformError(Object error, StackTrace stackTrace) {
-    developer.log('The native stylus event stream reported an error.', name: 'stylet', error: error, stackTrace: stackTrace);
+    developer.log(
+      'The native stylus event stream reported an error.',
+      name: 'stylet',
+      error: error,
+      stackTrace: stackTrace,
+    );
   }
 }

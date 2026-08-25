@@ -44,6 +44,12 @@ enum StylusFeature {
   /// Multiple hardware samples delivered together without losing history.
   historicalSamples,
 
+  /// Temporary future samples intended to reduce apparent rendering latency.
+  predictedSamples,
+
+  /// Corrections for sensor values that were initially estimated.
+  estimatedPropertyUpdates,
+
   /// Descriptive information and connection changes for input devices.
   deviceInfo,
 
@@ -85,7 +91,10 @@ class StylusCapabilities {
 
   /// Creates a capability description from platform-channel feature names.
   factory StylusCapabilities.fromNames({required Iterable<String> names}) {
-    final Set<StylusFeature> features = names.map(_featureFromName).whereType<StylusFeature>().toSet();
+    final Set<StylusFeature> features = names
+        .map(_featureFromName)
+        .whereType<StylusFeature>()
+        .toSet();
     return StylusCapabilities(features: Set.unmodifiable(features));
   }
 
@@ -93,16 +102,21 @@ class StylusCapabilities {
   bool supports(StylusFeature feature) => features.contains(feature);
 
   /// Returns a description containing the features from both values.
-  StylusCapabilities merge(StylusCapabilities other) => StylusCapabilities(features: Set.unmodifiable(features.followedBy(other.features).toSet()));
+  StylusCapabilities merge(StylusCapabilities other) => StylusCapabilities(
+    features: Set.unmodifiable(features.followedBy(other.features).toSet()),
+  );
 
   @override
-  bool operator ==(Object other) => identical(this, other) || other is StylusCapabilities && setEquals(features, other.features);
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is StylusCapabilities && setEquals(features, other.features);
 
   @override
   int get hashCode => Object.hashAllUnordered(features);
 
   @override
-  String toString() => 'StylusCapabilities(${features.map((feature) => feature.name).join(', ')})';
+  String toString() =>
+      'StylusCapabilities(${features.map((feature) => feature.name).join(', ')})';
 }
 
 /// Converts a platform-channel name into a known feature.

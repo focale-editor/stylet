@@ -24,6 +24,9 @@ namespace stylet {
 /** Forward declaration of the optional dynamically loaded Wintab bridge. */
 class WintabBackend;
 
+/** Forward declaration of the optional Windows App SDK predictor bridge. */
+class WindowsPredictionBackend;
+
 /** Collects high-fidelity WM_POINTER pen data for the Dart Stylet API. */
 class StyletPlugin : public flutter::Plugin {
  private:
@@ -54,6 +57,9 @@ class StyletPlugin : public flutter::Plugin {
 
   /** Optional Wintab bridge used for driver-only pen axes. */
   std::unique_ptr<WintabBackend> wintab_backend_;
+
+  /** Optional experimental Windows App SDK pointer prediction bridge. */
+  std::unique_ptr<WindowsPredictionBackend> prediction_backend_;
 
  public:
   /** Creates a plugin associated with a live Windows registrar. */

@@ -68,6 +68,12 @@ class _StylusLaboratoryState extends State<_StylusLaboratory> {
   /// Latest graphics-tablet pad control change.
   TabletPadEvent? _padEvent;
 
+  /// Latest replaceable predicted trajectory.
+  StylusPredictionEvent? _prediction;
+
+  /// Latest correction for an initially estimated sample.
+  StylusCorrectionEvent? _correction;
+
   @override
   void initState() {
     super.initState();
@@ -105,6 +111,8 @@ class _StylusLaboratoryState extends State<_StylusLaboratory> {
                 behavior: HitTestBehavior.opaque,
                 onEvent: _handleMotion,
                 onAction: _handleAction,
+                onPrediction: _handlePrediction,
+                onCorrection: _handleCorrection,
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     color: Theme.of(context).colorScheme.surfaceContainer,
@@ -132,6 +140,8 @@ class _StylusLaboratoryState extends State<_StylusLaboratory> {
               action: _action,
               deviceEvent: _deviceEvent,
               padEvent: _padEvent,
+              prediction: _prediction,
+              correction: _correction,
               deviceCount: _stylet.connectedDevices.length,
             ),
           ],
@@ -175,6 +185,14 @@ class _StylusLaboratoryState extends State<_StylusLaboratory> {
   /// Stores the latest graphics-tablet control event for inspection.
   void _handlePadEvent(TabletPadEvent event) =>
       setState(() => _padEvent = event);
+
+  /// Stores the latest replacement prediction for inspection.
+  void _handlePrediction(StylusPredictionEvent event) =>
+      setState(() => _prediction = event);
+
+  /// Stores the latest estimated-property correction for inspection.
+  void _handleCorrection(StylusCorrectionEvent event) =>
+      setState(() => _correction = event);
 }
 
 /// Displays the advanced features offered by the current backend.
@@ -216,6 +234,12 @@ class _TelemetryPanel extends StatelessWidget {
   /// Latest graphics-tablet pad control change.
   final TabletPadEvent? padEvent;
 
+  /// Latest replaceable trajectory prediction.
+  final StylusPredictionEvent? prediction;
+
+  /// Latest definitive update for an estimated sample.
+  final StylusCorrectionEvent? correction;
+
   /// Number of native devices currently tracked by the controller.
   final int deviceCount;
 
@@ -225,6 +249,8 @@ class _TelemetryPanel extends StatelessWidget {
     required this.action,
     required this.deviceEvent,
     required this.padEvent,
+    required this.prediction,
+    required this.correction,
     required this.deviceCount,
   });
 
@@ -271,6 +297,18 @@ class _TelemetryPanel extends StatelessWidget {
               value: _formatDeviceEvent(deviceEvent),
             ),
             _Metric(label: 'Pad event', value: _formatPadEvent(padEvent)),
+            _Metric(
+              label: 'Prediction',
+              value: '${prediction?.samples.length ?? 0} samples',
+            ),
+            _Metric(
+              label: 'Correction',
+              value: correction == null
+                  ? '—'
+                  : correction!.correctedProperties
+                        .map((property) => property.name)
+                        .join(', '),
+            ),
           ],
         ),
       ),

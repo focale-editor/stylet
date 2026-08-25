@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "dependencies": {
+    "native,Version=v0.0": {
+      "Microsoft.Windows.CppWinRT": {
+        "type": "Direct",
+        "requested": "[2.0.250303.1, )",
+        "resolved": "2.0.250303.1",
+        "contentHash": "9ofajkdPu3wuic60KKXAyCgCCGMXTlyd8KEnCzY5hVwqS8o17zwDLrJElFRx7vEf/Tr/QF2uDNDYdsYlg6TKCw=="
+      },
+      "Microsoft.WindowsAppSDK.Foundation": {
+        "type": "Direct",
+        "requested": "[2.3.7-experimental, )",
+        "resolved": "2.3.7-experimental",
+        "contentHash": "gZJFiAkAo9VGNc7GOznQfG2MgyFw/HA9zwq+KkDtm3lnqbKbQONsz4OwHV0FTgzzBdVOWbB4YiDj8o+cFMXlvg==",
+        "dependencies": {
+          "Microsoft.WindowsAppSDK.Base": "2.0.5-experimental2",
+          "Microsoft.WindowsAppSDK.InteractiveExperiences": "2.1.4-experimental"
+        }
+      },
+      "Microsoft.WindowsAppSDK.Runtime": {
+        "type": "Direct",
+        "requested": "[2.3.2-experimentalA, )",
+        "resolved": "2.3.2-experimentalA",
+        "contentHash": "ZCbVzbKJ8ChdZrzISeLmp+eklSHtCge7Us5GOJg6n9HBhjHECw2C50LT1BSWtg9qLNu1KkkaOplbkb8MVSX8pg==",
+        "dependencies": {
+          "Microsoft.WindowsAppSDK.Base": "2.0.5-experimental2"
+        }
+      },
+      "Microsoft.Windows.SDK.BuildTools": {
+        "type": "Transitive",
+        "resolved": "10.0.26100.4654",
+        "contentHash": "2mgcOlj/t2RfSyyw+pVESfO+Tk1RkfQzto9Vrq42M1lUQIfQEwbi8QLha9GXWIOj+TFzeHIEJckIoF25mgiM8A=="
+      },
+      "Microsoft.Windows.SDK.BuildTools.MSIX": {
+        "type": "Transitive",
+        "resolved": "1.7.251221100",
+        "contentHash": "f4aIZJ0NUth2403oxrpR+9rxVzZVI6dabqB21u8ncnk8eJAKCs9m77E4iYAnvP1YwrRe4axz3f8+yUcttNSfEA=="
+      },
+      "Microsoft.WindowsAppSDK.Base": {
+        "type": "Transitive",
+        "resolved": "2.0.5-experimental2",
+        "contentHash": "1ZLLuK+S830P9U55xbDLiRUHlGD4r2kMtI34A6jJ9OF7pBzkqpBkfsVwGWare6BJ1616VNutez86sJtzFFGwng==",
+        "dependencies": {
+          "Microsoft.Windows.SDK.BuildTools": "10.0.26100.4654",
+          "Microsoft.Windows.SDK.BuildTools.MSIX": "1.7.251221100"
+        }
+      },
+      "Microsoft.WindowsAppSDK.InteractiveExperiences": {
+        "type": "Transitive",
+        "resolved": "2.1.4-experimental",
+        "contentHash": "u4JkyLzcdgBOEwoOQnRCjzldSMYOSVmgmgNocuXxoDJtHi225BcXe7chW3ciiqfFT5YmH/Ieu3GRqEUuHU7ahQ==",
+        "dependencies": {
+          "Microsoft.WindowsAppSDK.Base": "2.0.3-experimental1"
+        }
+      }
+    }
+  }
+}

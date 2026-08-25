@@ -1,13 +1,18 @@
 # Stylet
 
-High-fidelity stylus input for Flutter on Android, iOS, Linux, macOS, and
+High-fidelity stylus input for Flutter on Android, iOS, Linux, macOS, Web, and
 Windows.
 
 Stylet keeps Flutter's regular `PointerEvent` pipeline intact and enriches it
 with native values that Flutter does not expose everywhere: barrel rotation,
 tangential pressure, Apple Pencil double-tap and squeeze, native tilt axes, and
-device identifiers. It is designed for drawing applications such as Focale,
-but does not impose a canvas, brush engine, or state-management solution.
+device identifiers. Replaceable motion predictions and corrections for
+initially estimated Apple Pencil values are exposed separately from definitive
+input. On the Web, Pointer Events add raw/coalesced samples, tangential pressure,
+rotation, and browser-generated predictions; the experimental Ink API is an
+optional compositor trail. Stylet is designed for drawing applications such as
+Focale, but does not impose a canvas, brush engine, or state-management
+solution.
 
 ## Installation
 
@@ -51,6 +56,12 @@ StyletListener(
         event.phase == StylusActionPhase.began) {
       showToolPalette(at: event.pose?.position);
     }
+  },
+  onPrediction: (StylusPredictionEvent event) {
+    replacePredictedPath(event.pointerIdentifier, event.samples);
+  },
+  onCorrection: (StylusCorrectionEvent event) {
+    replaceRecordedSample(event.sampleIdentifier, event.correctedSample);
   },
   child: const DocumentCanvas(),
 )
@@ -97,6 +108,36 @@ final StreamSubscription<StylusActionEvent> subscription = Stylet.instance.actio
 await subscription.cancel();
 ```
 
+Predictions are temporary previews. Each event replaces the preceding preview
+for its pointer, including an empty sample list that clears it:
+
+```dart
+final StreamSubscription<StylusPredictionEvent> predictions =
+    Stylet.instance.predictions.listen((event) {
+  replacePredictedPath(
+    pointerIdentifier: event.pointerIdentifier,
+    samples: event.samples,
+  );
+});
+
+final StreamSubscription<StylusCorrectionEvent> corrections =
+    Stylet.instance.corrections.listen((event) {
+  replaceRecordedSample(
+    identifier: event.sampleIdentifier,
+    sample: event.correctedSample,
+  );
+});
+```
+
+Cancel both application-owned subscriptions with their lifecycle. Prediction
+positions use Flutter-view coordinates like other native events; transform them
+through the receiving render object when drawing inside a nested widget.
+
+Web applications can additionally opt into a browser-composited delegated ink
+trail. It is a visual latency optimization, not a replacement for authoritative
+`StyletListener` samples. See [`docs/web_support.md`](docs/web_support.md) for
+feature detection, setup, and lifecycle details.
+
 ## API model
 
 `StylusMotionEvent` uses consistent semantics across platforms:
@@ -110,7 +151,10 @@ await subscription.cancel();
 - tangential pressure is normalized from -1 to 1;
 - `wheelDelta` is signed relative stylus-wheel movement in radians;
 - buttons use Flutter's public button bit field; use
-  `isSideButtonPressed(number: 1)` instead of hard-coded masks.
+  `isSideButtonPressed(number: 1)` instead of hard-coded masks;
+- `sampleIdentifier` correlates an estimated sample with a later correction;
+- estimated properties and properties still expecting updates are distinct,
+  because a value can remain estimated after the platform stops refining it.
 
 `StylusCapabilities` describes what the current backend can potentially
 provide. The `features` set on an individual motion sample is more precise and
@@ -131,21 +175,24 @@ relative dials require tablet-v2 version 2.
 
 ## Platform support
 
-| Feature                     | Android          | iOS/iPadOS                  | Linux                       | macOS                  | Windows                     |
-|-----------------------------|------------------|-----------------------------|-----------------------------|------------------------|-----------------------------|
-| Pressure, tilt, orientation | Yes              | Yes                         | Yes                         | Yes                    | Yes                         |
-| Hover pose                  | Yes              | iPadOS 16.1+                | Yes                         | Yes                    | Yes                         |
-| Side buttons                | Yes              | —                           | Yes                         | Yes                    | Yes                         |
-| Eraser tool                 | Yes              | —                           | Yes                         | Yes                    | Yes                         |
-| Barrel rotation             | Driver `AXIS_RZ` | iOS 17.5+                   | GTK or tablet-v2            | AppKit rotation        | Windows Ink                 |
-| Tangential pressure         | —                | —                           | GTK or tablet-v2            | AppKit barrel pressure | Wintab driver, when present |
-| Stylus wheel                | —                | —                           | Wayland tablet-v2           | —                      | —                           |
-| High-rate sample delivery   | Flutter events   | Flutter events              | Protocol frames             | Coalescing disabled    | Windows Ink history batches |
-| Device metadata             | —                | —                           | GTK or tablet-v2            | AppKit                 | Windows Ink                 |
-| Pad buttons, rings, strips  | —                | —                           | GTK or tablet-v2            | —                      | —                           |
-| Relative pad dials          | —                | —                           | Tablet-v2 version 2         | —                      | —                           |
-| Double-tap                  | —                | Apple Pencil                | —                           | —                      | —                           |
-| Squeeze                     | —                | iOS 17.5+, Apple Pencil Pro | —                           | —                      | —                           |
+| Feature                     | Android          | iOS/iPadOS                  | Linux                       | macOS                  | Web                         | Windows                     |
+|-----------------------------|------------------|-----------------------------|-----------------------------|------------------------|-----------------------------|-----------------------------|
+| Pressure, tilt, orientation | Yes              | Yes                         | Yes                         | Yes                    | Pointer Events              | Yes                         |
+| Hover pose                  | Yes              | iPadOS 16.1+                | Yes                         | Yes                    | Pointer Events              | Yes                         |
+| Side buttons                | Yes              | —                           | Yes                         | Yes                    | First barrel button         | Yes                         |
+| Eraser tool                 | Yes              | —                           | Yes                         | Yes                    | Pointer Events              | Yes                         |
+| Barrel rotation             | Driver `AXIS_RZ` | iOS 17.5+                   | GTK or tablet-v2            | AppKit rotation        | `PointerEvent.twist`        | Windows Ink                 |
+| Tangential pressure         | —                | —                           | GTK or tablet-v2            | AppKit barrel pressure | Pointer Events              | Wintab driver, when present |
+| Stylus wheel                | —                | —                           | Wayland tablet-v2           | —                      | —                           | —                           |
+| High-rate sample delivery   | Motion history   | Coalesced touches            | Protocol frames             | Coalescing disabled    | Coalesced/raw updates       | Windows Ink history batches |
+| Predicted trajectories      | AndroidX Input   | UIKit                       | —                           | —                      | Browser, when available     | Experimental opt-in         |
+| Delegated compositor trail  | —                | —                           | —                           | —                      | Experimental Ink API       | —                           |
+| Estimated-value corrections | —                | UIKit                       | —                           | —                      | —                           | —                           |
+| Device identity / metadata  | InputManager     | —                           | GTK or tablet-v2            | AppKit                 | PE4 session ID, if available | Windows Ink              |
+| Pad buttons, rings, strips  | —                | —                           | GTK or tablet-v2            | —                      | —                           | —                           |
+| Relative pad dials          | —                | —                           | Tablet-v2 version 2         | —                      | —                           | —                           |
+| Double-tap                  | —                | Apple Pencil                | —                           | —                      | —                           | —                           |
+| Squeeze                     | —                | iOS 17.5+, Apple Pencil Pro | —                           | —                      | —                           | —                           |
 
 Hardware and tablet drivers determine whether an advertised axis produces
 meaningful values. Every backend observes input passively and returns the
@@ -161,9 +208,11 @@ Backend maintainers can find channel names, required packet fields, units, and
 lifecycle rules in [`docs/platform_contract.md`](docs/platform_contract.md).
 Native dependencies and fallback behavior are detailed in
 [`docs/native_backends.md`](docs/native_backends.md).
+Web Pointer Events and delegated ink behavior are detailed in
+[`docs/web_support.md`](docs/web_support.md).
 The runnable application in [`example/`](example/) visualizes capabilities,
 pressure, tilt, barrel angle, stylus-wheel movement, side buttons, body
-actions, native devices, and tablet-pad controls.
+actions, predictions, corrections, native devices, and tablet-pad controls.
 
 ## Development
 

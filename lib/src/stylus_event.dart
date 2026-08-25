@@ -50,6 +50,24 @@ enum StylusTool {
   unknown,
 }
 
+/// Identifies a motion value that can be estimated and corrected later.
+enum StylusSampleProperty {
+  /// Position relative to the Flutter view.
+  position,
+
+  /// Pressure applied by the stylus tip.
+  pressure,
+
+  /// Angle between the stylus and the surface normal.
+  tilt,
+
+  /// Direction of the stylus projection across the surface.
+  orientation,
+
+  /// Rotation around the stylus' longitudinal axis.
+  barrelRotation,
+}
+
 /// Identifies a discrete interaction performed on a stylus body.
 enum StylusAction {
   /// A double tap on the stylus body.
@@ -111,6 +129,9 @@ final class StylusMotionEvent extends StyletEvent {
   /// The platform event identifier used to correlate native and Flutter data.
   final int? embedderIdentifier;
 
+  /// Platform identifier used to replace values that were initially estimated.
+  final String? sampleIdentifier;
+
   /// Position in logical pixels relative to the Flutter view.
   final Offset position;
 
@@ -165,6 +186,12 @@ final class StylusMotionEvent extends StyletEvent {
   /// Features known to be represented or supported by this sample.
   final Set<StylusFeature> features;
 
+  /// Values in this sample that are estimates rather than final measurements.
+  final Set<StylusSampleProperty> estimatedProperties;
+
+  /// Estimated values for which the platform expects to send a later update.
+  final Set<StylusSampleProperty> propertiesExpectingUpdates;
+
   /// The original Flutter pointer event, when this sample was derived from one.
   final PointerEvent? originalEvent;
 
@@ -180,6 +207,7 @@ final class StylusMotionEvent extends StyletEvent {
     this.deviceIdentifier,
     this.nativeDeviceIdentifier,
     this.embedderIdentifier,
+    this.sampleIdentifier,
     this.delta = Offset.zero,
     this.buttons = 0,
     this.isDown = false,
@@ -196,40 +224,60 @@ final class StylusMotionEvent extends StyletEvent {
     this.tangentialPressure,
     this.wheelDelta,
     this.features = const {},
+    this.estimatedProperties = const {},
+    this.propertiesExpectingUpdates = const {},
     this.originalEvent,
   });
 
   /// Converts [event] and optionally merges matching platform [enhancement] data.
-  factory StylusMotionEvent.fromPointerEvent({required PointerEvent event, StylusMotionEvent? enhancement}) {
-    final Set<StylusFeature> features = {..._featuresForPointer(event), ...?enhancement?.features};
+  factory StylusMotionEvent.fromPointerEvent({
+    required PointerEvent event,
+    StylusMotionEvent? enhancement,
+  }) {
+    final Set<StylusFeature> features = {
+      ..._featuresForPointer(event),
+      ...?enhancement?.features,
+    };
     final StylusTool flutterTool = _toolForPointer(event);
     return StylusMotionEvent(
       timeStamp: event.timeStamp,
-      source: enhancement == null ? StyletEventSource.flutter : StyletEventSource.combined,
+      source: enhancement == null
+          ? StyletEventSource.flutter
+          : StyletEventSource.combined,
       phase: _phaseForPointer(event),
-      tool: flutterTool == StylusTool.unknown ? enhancement?.tool ?? flutterTool : flutterTool,
+      tool: flutterTool == StylusTool.unknown
+          ? enhancement?.tool ?? flutterTool
+          : flutterTool,
       pointerIdentifier: event.pointer,
-      deviceIdentifier: event.device,
+      deviceIdentifier: event.device == 0
+          ? enhancement?.deviceIdentifier
+          : event.device,
       nativeDeviceIdentifier: enhancement?.nativeDeviceIdentifier,
-      embedderIdentifier: event.embedderId == 0 ? enhancement?.embedderIdentifier : event.embedderId,
+      embedderIdentifier: event.embedderId == 0
+          ? enhancement?.embedderIdentifier
+          : event.embedderId,
+      sampleIdentifier: enhancement?.sampleIdentifier,
       position: event.position,
       localPosition: event.localPosition,
       delta: event.delta,
       buttons: event.buttons | (enhancement?.buttons ?? 0),
       isDown: event.down,
-      pressure: event.pressure,
-      pressureMinimum: event.pressureMin,
-      pressureMaximum: event.pressureMax,
-      distance: event.distance,
-      distanceMaximum: event.distanceMax,
-      tilt: event.tilt,
-      orientation: event.orientation,
+      pressure: enhancement?.pressure ?? event.pressure,
+      pressureMinimum: enhancement?.pressureMinimum ?? event.pressureMin,
+      pressureMaximum: enhancement?.pressureMaximum ?? event.pressureMax,
+      distance: enhancement?.distance ?? event.distance,
+      distanceMaximum: enhancement?.distanceMaximum ?? event.distanceMax,
+      tilt: enhancement?.tilt ?? event.tilt,
+      orientation: enhancement?.orientation ?? event.orientation,
       tiltX: enhancement?.tiltX,
       tiltY: enhancement?.tiltY,
       barrelRotation: enhancement?.barrelRotation,
       tangentialPressure: enhancement?.tangentialPressure,
       wheelDelta: enhancement?.wheelDelta,
       features: Set.unmodifiable(features),
+      estimatedProperties: enhancement?.estimatedProperties ?? const {},
+      propertiesExpectingUpdates:
+          enhancement?.propertiesExpectingUpdates ?? const {},
       originalEvent: event,
     );
   }
@@ -262,6 +310,12 @@ final class StylusMotionEvent extends StyletEvent {
   /// Whether this sample came from a pen or eraser rather than another pointer.
   bool get isStylus => tool != StylusTool.unknown;
 
+  /// Whether at least one value in this sample is not yet definitive.
+  bool get hasEstimatedProperties => estimatedProperties.isNotEmpty;
+
+  /// Whether the platform expects to refine at least one value later.
+  bool get expectsPropertyUpdates => propertiesExpectingUpdates.isNotEmpty;
+
   /// Whether [feature] is represented or supported by this sample.
   bool supports(StylusFeature feature) => features.contains(feature);
 
@@ -274,7 +328,67 @@ final class StylusMotionEvent extends StyletEvent {
   }
 
   @override
-  String toString() => 'StylusMotionEvent(phase: ${phase.name}, tool: ${tool.name}, position: $position, pressure: $normalizedPressure, rotation: $barrelRotation)';
+  String toString() =>
+      'StylusMotionEvent(phase: ${phase.name}, tool: ${tool.name}, position: $position, pressure: $normalizedPressure, rotation: $barrelRotation)';
+}
+
+/// A replaceable trajectory predicted from the latest real motion samples.
+@immutable
+final class StylusPredictionEvent extends StyletEvent {
+  /// Interaction-scoped pointer whose previous prediction this event replaces.
+  final int? pointerIdentifier;
+
+  /// Platform device that produced the source motion, when available.
+  final int? deviceIdentifier;
+
+  /// Stable native description of the source tool, when available.
+  final String? nativeDeviceIdentifier;
+
+  /// Future samples in chronological order, or an empty list to clear a preview.
+  final List<StylusMotionEvent> samples;
+
+  /// Creates one atomic replacement for a pointer's predicted trajectory.
+  StylusPredictionEvent({
+    required super.timeStamp,
+    required super.source,
+    required this.pointerIdentifier,
+    required List<StylusMotionEvent> samples,
+    this.deviceIdentifier,
+    this.nativeDeviceIdentifier,
+  }) : samples = List.unmodifiable(samples);
+
+  /// Whether consumers should remove the pointer's previous predicted trajectory.
+  bool get clearsPrevious => samples.isEmpty;
+
+  @override
+  String toString() =>
+      'StylusPredictionEvent(pointer: $pointerIdentifier, samples: ${samples.length})';
+}
+
+/// Definitive values replacing properties in an earlier estimated sample.
+@immutable
+final class StylusCorrectionEvent extends StyletEvent {
+  /// Identifier of the original [StylusMotionEvent] that must be updated.
+  final String sampleIdentifier;
+
+  /// Latest complete representation of the original motion sample.
+  final StylusMotionEvent correctedSample;
+
+  /// Properties whose pending updates were resolved by this notification.
+  final Set<StylusSampleProperty> correctedProperties;
+
+  /// Creates a correction for one previously identified motion sample.
+  StylusCorrectionEvent({
+    required super.timeStamp,
+    required super.source,
+    required this.sampleIdentifier,
+    required this.correctedSample,
+    Set<StylusSampleProperty> correctedProperties = const {},
+  }) : correctedProperties = Set.unmodifiable(correctedProperties);
+
+  @override
+  String toString() =>
+      'StylusCorrectionEvent(sample: $sampleIdentifier, properties: ${correctedProperties.map((property) => property.name).join(', ')})';
 }
 
 /// A stylus pose attached to a body gesture such as squeeze.
@@ -296,10 +410,17 @@ final class StylusPose {
   final double? barrelRotation;
 
   /// Creates the optional pose supplied with a stylus body interaction.
-  const StylusPose({this.position, this.distance, this.tilt, this.orientation, this.barrelRotation});
+  const StylusPose({
+    this.position,
+    this.distance,
+    this.tilt,
+    this.orientation,
+    this.barrelRotation,
+  });
 
   @override
-  String toString() => 'StylusPose(position: $position, distance: $distance, tilt: $tilt, orientation: $orientation, rotation: $barrelRotation)';
+  String toString() =>
+      'StylusPose(position: $position, distance: $distance, tilt: $tilt, orientation: $orientation, rotation: $barrelRotation)';
 }
 
 /// A double-tap or squeeze reported by a supported stylus.
@@ -315,10 +436,17 @@ final class StylusActionEvent extends StyletEvent {
   final StylusPose? pose;
 
   /// Creates a normalized stylus body interaction.
-  const StylusActionEvent({required super.timeStamp, required super.source, required this.action, required this.phase, this.pose});
+  const StylusActionEvent({
+    required super.timeStamp,
+    required super.source,
+    required this.action,
+    required this.phase,
+    this.pose,
+  });
 
   @override
-  String toString() => 'StylusActionEvent(action: ${action.name}, phase: ${phase.name}, pose: $pose)';
+  String toString() =>
+      'StylusActionEvent(action: ${action.name}, phase: ${phase.name}, pose: $pose)';
 }
 
 /// Identifies the native object described by a device event.
@@ -401,10 +529,20 @@ final class StylusDevice {
           setEquals(features, other.features);
 
   @override
-  int get hashCode => Object.hash(identifier, kind, name, vendorIdentifier, productIdentifier, tool, buttonCount, Object.hashAllUnordered(features));
+  int get hashCode => Object.hash(
+    identifier,
+    kind,
+    name,
+    vendorIdentifier,
+    productIdentifier,
+    tool,
+    buttonCount,
+    Object.hashAllUnordered(features),
+  );
 
   @override
-  String toString() => 'StylusDevice(identifier: $identifier, kind: ${kind.name}, name: $name, features: ${features.map((feature) => feature.name).join(', ')})';
+  String toString() =>
+      'StylusDevice(identifier: $identifier, kind: ${kind.name}, name: $name, features: ${features.map((feature) => feature.name).join(', ')})';
 }
 
 /// A native tablet, tool, or pad connection and metadata change.
@@ -425,7 +563,8 @@ final class StylusDeviceEvent extends StyletEvent {
   });
 
   @override
-  String toString() => 'StylusDeviceEvent(phase: ${phase.name}, device: $device)';
+  String toString() =>
+      'StylusDeviceEvent(phase: ${phase.name}, device: $device)';
 }
 
 /// Identifies a physical control on a graphics-tablet pad.
@@ -504,7 +643,8 @@ final class TabletPadEvent extends StyletEvent {
   };
 
   @override
-  String toString() => 'TabletPadEvent(device: $deviceIdentifier, control: ${control.name}[$controlIndex], phase: ${phase.name}, value: $value, mode: $mode)';
+  String toString() =>
+      'TabletPadEvent(device: $deviceIdentifier, control: ${control.name}[$controlIndex], phase: ${phase.name}, value: $value, mode: $mode)';
 }
 
 /// Returns the normalized lifecycle stage for a Flutter pointer event.
@@ -528,7 +668,8 @@ StylusTool _toolForPointer(PointerEvent event) => switch (event.kind) {
 
 /// Infers the portable features carried by a Flutter pointer event.
 Set<StylusFeature> _featuresForPointer(PointerEvent event) {
-  if (event.kind != PointerDeviceKind.stylus && event.kind != PointerDeviceKind.invertedStylus) {
+  if (event.kind != PointerDeviceKind.stylus &&
+      event.kind != PointerDeviceKind.invertedStylus) {
     return const {};
   }
   final Set<StylusFeature> features = {

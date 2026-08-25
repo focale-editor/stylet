@@ -10,7 +10,9 @@ import 'package:stylet/stylet_platform_interface.dart';
 /// In-memory backend used to drive controller and widget tests synchronously.
 class _FakeStyletPlatform extends StyletPlatform {
   /// Stream controller that represents the native event channel.
-  final StreamController<StyletEvent> _controller = StreamController.broadcast(sync: true);
+  final StreamController<StyletEvent> _controller = StreamController.broadcast(
+    sync: true,
+  );
 
   /// Capabilities returned to the controller under test.
   final StylusCapabilities capabilities;
@@ -48,7 +50,9 @@ void main() {
         orientation: 0.7,
       );
 
-      final StylusMotionEvent event = StylusMotionEvent.fromPointerEvent(event: pointer);
+      final StylusMotionEvent event = StylusMotionEvent.fromPointerEvent(
+        event: pointer,
+      );
 
       check(event.normalizedPressure).isNotNull().equals(0.5);
       check(event.isSideButtonPressed(number: 1)).isTrue();
@@ -57,13 +61,23 @@ void main() {
       check(event.supports(StylusFeature.distance)).isTrue();
       check(event.tool).equals(StylusTool.pen);
 
-      const PointerHoverEvent hover = PointerHoverEvent(kind: PointerDeviceKind.stylus, distance: 4, distanceMax: 8);
-      check(StylusMotionEvent.fromPointerEvent(event: hover).normalizedDistance).isNotNull().equals(0.5);
+      const PointerHoverEvent hover = PointerHoverEvent(
+        kind: PointerDeviceKind.stylus,
+        distance: 4,
+        distanceMax: 8,
+      );
+      check(StylusMotionEvent.fromPointerEvent(event: hover).normalizedDistance)
+          .isNotNull()
+          .equals(0.5);
     });
 
     test('recognizes the eraser and validates button numbers', () {
-      const PointerHoverEvent pointer = PointerHoverEvent(kind: PointerDeviceKind.invertedStylus);
-      final StylusMotionEvent event = StylusMotionEvent.fromPointerEvent(event: pointer);
+      const PointerHoverEvent pointer = PointerHoverEvent(
+        kind: PointerDeviceKind.invertedStylus,
+      );
+      final StylusMotionEvent event = StylusMotionEvent.fromPointerEvent(
+        event: pointer,
+      );
 
       check(event.tool).equals(StylusTool.eraser);
       check(() => event.isSideButtonPressed(number: 0)).throws<RangeError>();
@@ -82,9 +96,21 @@ void main() {
         embedderIdentifier: 83,
         position: Offset(100, 80),
         localPosition: Offset(100, 80),
+        deviceIdentifier: 42,
+        pressure: 0.75,
+        pressureMinimum: 0,
+        pressureMaximum: 1,
+        tilt: 0.45,
+        orientation: -0.6,
         barrelRotation: 1.25,
         tangentialPressure: -0.4,
-        features: {StylusFeature.barrelRotation, StylusFeature.tangentialPressure},
+        features: {
+          StylusFeature.pressure,
+          StylusFeature.tilt,
+          StylusFeature.orientation,
+          StylusFeature.barrelRotation,
+          StylusFeature.tangentialPressure,
+        },
       );
       platform.emit(native);
 
@@ -95,9 +121,15 @@ void main() {
         position: Offset(100, 80),
         embedderId: 83,
       );
-      final StylusMotionEvent event = stylet.convertPointerEvent(event: pointer);
+      final StylusMotionEvent event = stylet.convertPointerEvent(
+        event: pointer,
+      );
 
       check(event.source).equals(StyletEventSource.combined);
+      check(event.deviceIdentifier).equals(42);
+      check(event.pressure).equals(0.75);
+      check(event.tilt).equals(0.45);
+      check(event.orientation).equals(-0.6);
       check(event.barrelRotation).equals(1.25);
       check(event.tangentialPressure).equals(-0.4);
       check(event.originalEvent).isNotNull().identicalTo(pointer);
@@ -125,7 +157,9 @@ void main() {
         kind: PointerDeviceKind.stylus,
         position: Offset.zero,
       );
-      final StylusMotionEvent event = stylet.convertPointerEvent(event: pointer);
+      final StylusMotionEvent event = stylet.convertPointerEvent(
+        event: pointer,
+      );
 
       check(event.source).equals(StyletEventSource.flutter);
       check(event.barrelRotation).isNull();
@@ -133,9 +167,69 @@ void main() {
       await platform.dispose();
     });
 
+    test(
+      'applies native corrections to samples awaiting Flutter correlation',
+      () async {
+        final _FakeStyletPlatform platform = _FakeStyletPlatform();
+        final Stylet stylet = Stylet(platform: platform);
+        const StylusMotionEvent estimated = StylusMotionEvent(
+          timeStamp: Duration(milliseconds: 20),
+          source: StyletEventSource.native,
+          phase: StylusPhase.move,
+          tool: StylusTool.pen,
+          sampleIdentifier: 'sample:roll',
+          embedderIdentifier: 91,
+          position: Offset(20, 30),
+          localPosition: Offset(20, 30),
+          barrelRotation: 1,
+          estimatedProperties: {StylusSampleProperty.barrelRotation},
+          propertiesExpectingUpdates: {StylusSampleProperty.barrelRotation},
+        );
+        const StylusMotionEvent corrected = StylusMotionEvent(
+          timeStamp: Duration(milliseconds: 20),
+          source: StyletEventSource.native,
+          phase: StylusPhase.move,
+          tool: StylusTool.pen,
+          sampleIdentifier: 'sample:roll',
+          embedderIdentifier: 91,
+          position: Offset(20, 30),
+          localPosition: Offset(20, 30),
+          barrelRotation: 2,
+        );
+        platform.emit(estimated);
+        platform.emit(
+          StylusCorrectionEvent(
+            timeStamp: const Duration(milliseconds: 21),
+            source: StyletEventSource.native,
+            sampleIdentifier: 'sample:roll',
+            correctedSample: corrected,
+            correctedProperties: const {StylusSampleProperty.barrelRotation},
+          ),
+        );
+
+        final StylusMotionEvent combined = stylet.convertPointerEvent(
+          event: const PointerMoveEvent(
+            timeStamp: Duration(milliseconds: 20),
+            kind: PointerDeviceKind.stylus,
+            position: Offset(20, 30),
+            embedderId: 91,
+          ),
+        );
+
+        check(combined.barrelRotation).equals(2);
+        check(combined.estimatedProperties).isEmpty();
+        await stylet.dispose();
+        await platform.dispose();
+      },
+    );
+
     test('forwards action events and platform capabilities', () async {
-      const StylusCapabilities capabilities = StylusCapabilities(features: {StylusFeature.barrelRotation, StylusFeature.squeeze});
-      final _FakeStyletPlatform platform = _FakeStyletPlatform(capabilities: capabilities);
+      const StylusCapabilities capabilities = StylusCapabilities(
+        features: {StylusFeature.barrelRotation, StylusFeature.squeeze},
+      );
+      final _FakeStyletPlatform platform = _FakeStyletPlatform(
+        capabilities: capabilities,
+      );
       final Stylet stylet = Stylet(platform: platform);
       final Future<StylusActionEvent> nextAction = stylet.actions.first;
 
@@ -154,6 +248,46 @@ void main() {
       await platform.dispose();
     });
 
+    test('keeps predictions and corrections on dedicated streams', () async {
+      final _FakeStyletPlatform platform = _FakeStyletPlatform();
+      final Stylet stylet = Stylet(platform: platform);
+      final Future<StylusPredictionEvent> nextPrediction =
+          stylet.predictions.first;
+      final Future<StylusCorrectionEvent> nextCorrection =
+          stylet.corrections.first;
+      final StylusMotionEvent sample = const StylusMotionEvent(
+        timeStamp: Duration(milliseconds: 2),
+        source: StyletEventSource.native,
+        phase: StylusPhase.move,
+        tool: StylusTool.pen,
+        sampleIdentifier: 'sample:1',
+        position: Offset(3, 4),
+        localPosition: Offset(3, 4),
+      );
+      platform.emit(
+        StylusPredictionEvent(
+          timeStamp: const Duration(milliseconds: 1),
+          source: StyletEventSource.native,
+          pointerIdentifier: 8,
+          samples: const [],
+        ),
+      );
+      platform.emit(
+        StylusCorrectionEvent(
+          timeStamp: const Duration(milliseconds: 3),
+          source: StyletEventSource.native,
+          sampleIdentifier: 'sample:1',
+          correctedSample: sample,
+          correctedProperties: const {StylusSampleProperty.pressure},
+        ),
+      );
+
+      check((await nextPrediction).clearsPrevious).isTrue();
+      check((await nextCorrection).correctedSample).identicalTo(sample);
+      await stylet.dispose();
+      await platform.dispose();
+    });
+
     test('tracks connected native devices and exposes pad events', () async {
       final _FakeStyletPlatform platform = _FakeStyletPlatform();
       final Stylet stylet = Stylet(platform: platform);
@@ -162,7 +296,10 @@ void main() {
         identifier: 'tablet:1',
         kind: StylusDeviceKind.tablet,
         name: 'Test tablet',
-        features: const {StylusFeature.deviceInfo, StylusFeature.tabletPadButtons},
+        features: const {
+          StylusFeature.deviceInfo,
+          StylusFeature.tabletPadButtons,
+        },
       );
       platform.emit(
         StylusDeviceEvent(
@@ -204,18 +341,26 @@ void main() {
       final Stylet stylet = Stylet(platform: platform);
       await stylet.dispose();
 
-      check(() => stylet.convertPointerEvent(event: const PointerHoverEvent(kind: PointerDeviceKind.stylus))).throws<StateError>();
+      check(
+        () => stylet.convertPointerEvent(
+          event: const PointerHoverEvent(kind: PointerDeviceKind.stylus),
+        ),
+      ).throws<StateError>();
       await platform.dispose();
     });
   });
 
-  testWidgets('StyletListener filters non-stylus input and forwards actions', (tester) async {
+  testWidgets('StyletListener filters non-stylus input and forwards actions', (
+    tester,
+  ) async {
     final _FakeStyletPlatform platform = _FakeStyletPlatform();
     final Stylet stylet = Stylet(platform: platform);
     addTearDown(stylet.dispose);
     addTearDown(platform.dispose);
     final List<StylusMotionEvent> motions = [];
     final List<StylusActionEvent> actions = [];
+    final List<StylusPredictionEvent> predictions = [];
+    final List<StylusCorrectionEvent> corrections = [];
     await tester.pumpWidget(
       Directionality(
         textDirection: TextDirection.ltr,
@@ -223,17 +368,25 @@ void main() {
           stylet: stylet,
           onEvent: motions.add,
           onAction: actions.add,
+          onPrediction: predictions.add,
+          onCorrection: corrections.add,
           behavior: HitTestBehavior.opaque,
           child: const SizedBox.expand(),
         ),
       ),
     );
 
-    final TestGesture mouse = await tester.createGesture(kind: PointerDeviceKind.mouse, pointer: 1);
+    final TestGesture mouse = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+      pointer: 1,
+    );
     await mouse.down(const Offset(10, 10));
     await mouse.up();
     await mouse.removePointer();
-    final TestGesture stylus = await tester.createGesture(kind: PointerDeviceKind.stylus, pointer: 2);
+    final TestGesture stylus = await tester.createGesture(
+      kind: PointerDeviceKind.stylus,
+      pointer: 2,
+    );
     await stylus.down(const Offset(10, 10));
     await stylus.up();
     await stylus.removePointer();
@@ -245,10 +398,37 @@ void main() {
         phase: StylusActionPhase.discrete,
       ),
     );
+    platform.emit(
+      StylusPredictionEvent(
+        timeStamp: Duration.zero,
+        source: StyletEventSource.native,
+        pointerIdentifier: 2,
+        samples: const [],
+      ),
+    );
+    const StylusMotionEvent correctedSample = StylusMotionEvent(
+      timeStamp: Duration.zero,
+      source: StyletEventSource.native,
+      phase: StylusPhase.up,
+      tool: StylusTool.pen,
+      sampleIdentifier: 'sample:2',
+      position: Offset(10, 10),
+      localPosition: Offset(10, 10),
+    );
+    platform.emit(
+      StylusCorrectionEvent(
+        timeStamp: Duration.zero,
+        source: StyletEventSource.native,
+        sampleIdentifier: 'sample:2',
+        correctedSample: correctedSample,
+      ),
+    );
     check(motions).length.equals(2);
     check(motions.first.tool).equals(StylusTool.pen);
     check(actions).length.equals(1);
     check(actions.single.action).equals(StylusAction.doubleTap);
+    check(predictions.single.clearsPrevious).isTrue();
+    check(corrections.single.correctedSample).identicalTo(correctedSample);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });

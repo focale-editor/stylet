@@ -30,17 +30,22 @@ class MethodChannelStylet extends StyletPlatform {
   });
 
   @override
-  Stream<StyletEvent> get events => _events ??= eventChannel.receiveBroadcastStream().expand(decodeStyletEvents);
+  Stream<StyletEvent> get events => _events ??= eventChannel
+      .receiveBroadcastStream()
+      .expand(decodeStyletEvents);
 
   @override
   Future<StylusCapabilities> getCapabilities() async {
     try {
-      final List<Object?>? values = await methodChannel.invokeListMethod<Object?>('getCapabilities');
+      final List<Object?>? values = await methodChannel
+          .invokeListMethod<Object?>('getCapabilities');
       if (values == null) {
         return StylusCapabilities.flutter;
       }
       final Iterable<String> names = values.whereType<String>();
-      return StylusCapabilities.flutter.merge(StylusCapabilities.fromNames(names: names));
+      return StylusCapabilities.flutter.merge(
+        StylusCapabilities.fromNames(names: names),
+      );
     } on MissingPluginException {
       return StylusCapabilities.flutter;
     }
@@ -72,17 +77,26 @@ StyletEvent decodeStyletEvent(Object? value) {
   final Map<Object?, Object?> map = _requiredMap(value, context: 'event');
   return switch (_requiredString(map, 'type')) {
     'motion' => _decodeMotionEvent(map),
+    'prediction' => _decodePredictionEvent(map),
+    'correction' => _decodeCorrectionEvent(map),
     'action' => _decodeActionEvent(map),
     'device' => _decodeDeviceEvent(map),
     'pad' => _decodePadEvent(map),
-    'batch' => throw const FormatException('Use decodeStyletEvents to decode a Stylet batch.'),
-    final String type => throw FormatException('Unknown Stylet event type "$type".'),
+    'batch' => throw const FormatException(
+      'Use decodeStyletEvents to decode a Stylet batch.',
+    ),
+    final String type => throw FormatException(
+      'Unknown Stylet event type "$type".',
+    ),
   };
 }
 
 /// Decodes a native motion sample.
 StylusMotionEvent _decodeMotionEvent(Map<Object?, Object?> map) {
-  final Offset position = Offset(_requiredDouble(map, 'x'), _requiredDouble(map, 'y'));
+  final Offset position = Offset(
+    _requiredDouble(map, 'x'),
+    _requiredDouble(map, 'y'),
+  );
   final StylusPhase phase = _phaseFromName(_requiredString(map, 'phase'));
   return StylusMotionEvent(
     timeStamp: Duration(microseconds: _requiredInt(map, 'timestampMicros')),
@@ -93,11 +107,17 @@ StylusMotionEvent _decodeMotionEvent(Map<Object?, Object?> map) {
     deviceIdentifier: _optionalInt(map, 'deviceIdentifier'),
     nativeDeviceIdentifier: _optionalString(map, 'nativeDeviceIdentifier'),
     embedderIdentifier: _optionalInt(map, 'embedderIdentifier'),
+    sampleIdentifier: _optionalString(map, 'sampleIdentifier'),
     position: position,
     localPosition: position,
-    delta: Offset(_optionalDouble(map, 'deltaX') ?? 0, _optionalDouble(map, 'deltaY') ?? 0),
+    delta: Offset(
+      _optionalDouble(map, 'deltaX') ?? 0,
+      _optionalDouble(map, 'deltaY') ?? 0,
+    ),
     buttons: _optionalInt(map, 'buttons') ?? 0,
-    isDown: _optionalBool(map, 'isDown') ?? phase == StylusPhase.down || phase == StylusPhase.move,
+    isDown:
+        _optionalBool(map, 'isDown') ??
+        phase == StylusPhase.down || phase == StylusPhase.move,
     pressure: _optionalDouble(map, 'pressure'),
     pressureMinimum: _optionalDouble(map, 'pressureMinimum'),
     pressureMaximum: _optionalDouble(map, 'pressureMaximum'),
@@ -111,7 +131,59 @@ StylusMotionEvent _decodeMotionEvent(Map<Object?, Object?> map) {
     tangentialPressure: _optionalDouble(map, 'tangentialPressure'),
     wheelDelta: _optionalDouble(map, 'wheelDelta'),
     features: _featuresFromValue(map['features']),
+    estimatedProperties: _samplePropertiesFromValue(map['estimatedProperties']),
+    propertiesExpectingUpdates: _samplePropertiesFromValue(
+      map['propertiesExpectingUpdates'],
+    ),
   );
+}
+
+/// Decodes one atomic replacement for a predicted pointer trajectory.
+StylusPredictionEvent _decodePredictionEvent(Map<Object?, Object?> map) {
+  final List<StylusMotionEvent> samples = _requiredList(
+    map,
+    'samples',
+  ).map(_decodeNestedMotion).toList();
+  return StylusPredictionEvent(
+    timeStamp: Duration(microseconds: _requiredInt(map, 'timestampMicros')),
+    source: StyletEventSource.native,
+    pointerIdentifier: _optionalInt(map, 'pointerIdentifier'),
+    deviceIdentifier: _optionalInt(map, 'deviceIdentifier'),
+    nativeDeviceIdentifier: _optionalString(map, 'nativeDeviceIdentifier'),
+    samples: samples,
+  );
+}
+
+/// Decodes definitive values for one previously estimated sample.
+StylusCorrectionEvent _decodeCorrectionEvent(Map<Object?, Object?> map) {
+  final String sampleIdentifier = _requiredString(map, 'sampleIdentifier');
+  final StylusMotionEvent correctedSample = _decodeNestedMotion(map['sample']);
+  if (correctedSample.sampleIdentifier != sampleIdentifier) {
+    throw const FormatException(
+      'A Stylet correction and its sample must use the same identifier.',
+    );
+  }
+  return StylusCorrectionEvent(
+    timeStamp: Duration(microseconds: _requiredInt(map, 'timestampMicros')),
+    source: StyletEventSource.native,
+    sampleIdentifier: sampleIdentifier,
+    correctedSample: correctedSample,
+    correctedProperties: _samplePropertiesFromValue(map['correctedProperties']),
+  );
+}
+
+/// Decodes a motion map nested inside a prediction or correction packet.
+StylusMotionEvent _decodeNestedMotion(Object? value) {
+  final Map<Object?, Object?> map = _requiredMap(
+    value,
+    context: 'motion sample',
+  );
+  if (_requiredString(map, 'type') != 'motion') {
+    throw const FormatException(
+      'A nested Stylet sample must have the motion type.',
+    );
+  }
+  return _decodeMotionEvent(map);
 }
 
 /// Decodes a native double-tap or squeeze interaction.
@@ -122,7 +194,9 @@ StylusActionEvent _decodeActionEvent(Map<Object?, Object?> map) {
     source: StyletEventSource.native,
     action: _actionFromName(_requiredString(map, 'action')),
     phase: _actionPhaseFromName(_requiredString(map, 'phase')),
-    pose: poseValue == null ? null : _decodePose(_requiredMap(poseValue, context: 'pose')),
+    pose: poseValue == null
+        ? null
+        : _decodePose(_requiredMap(poseValue, context: 'pose')),
   );
 }
 
@@ -130,7 +204,9 @@ StylusActionEvent _decodeActionEvent(Map<Object?, Object?> map) {
 StylusDeviceEvent _decodeDeviceEvent(Map<Object?, Object?> map) {
   final int? buttonCount = _optionalInt(map, 'buttonCount');
   if (buttonCount != null && buttonCount < 0) {
-    throw const FormatException('A Stylet device button count must be non-negative.');
+    throw const FormatException(
+      'A Stylet device button count must be non-negative.',
+    );
   }
   return StylusDeviceEvent(
     timeStamp: Duration(microseconds: _requiredInt(map, 'timestampMicros')),
@@ -157,7 +233,9 @@ TabletPadEvent _decodePadEvent(Map<Object?, Object?> map) {
   final int controlIndex = _requiredInt(map, 'controlIndex');
   final int? mode = _optionalInt(map, 'mode');
   if (controlIndex < 0 || (mode != null && mode < 0)) {
-    throw const FormatException('Stylet pad indices and modes must be non-negative.');
+    throw const FormatException(
+      'Stylet pad indices and modes must be non-negative.',
+    );
   }
   return TabletPadEvent(
     timeStamp: Duration(microseconds: _requiredInt(map, 'timestampMicros')),
@@ -270,6 +348,41 @@ Set<StylusFeature> _featuresFromValue(Object? value) {
   }
   final Iterable<String> names = value.whereType<String>();
   return StylusCapabilities.fromNames(names: names).features;
+}
+
+/// Converts an optional list into an immutable set of estimated properties.
+Set<StylusSampleProperty> _samplePropertiesFromValue(Object? value) {
+  if (value == null) {
+    return const {};
+  }
+  if (value is! List<Object?>) {
+    throw const FormatException(
+      'The Stylet sample-properties value must be a list.',
+    );
+  }
+  final Set<StylusSampleProperty> properties = {};
+  for (final Object? item in value) {
+    if (item is! String) {
+      throw const FormatException(
+        'Every Stylet sample property must be a string.',
+      );
+    }
+    final StylusSampleProperty? property = _samplePropertyFromName(item);
+    if (property != null) {
+      properties.add(property);
+    }
+  }
+  return Set.unmodifiable(properties);
+}
+
+/// Converts a platform name into a known estimable sample property.
+StylusSampleProperty? _samplePropertyFromName(String name) {
+  for (final StylusSampleProperty property in StylusSampleProperty.values) {
+    if (property.name == name) {
+      return property;
+    }
+  }
+  return null;
 }
 
 /// Reads a required channel map.

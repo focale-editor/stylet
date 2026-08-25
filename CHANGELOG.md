@@ -16,3 +16,13 @@
 - Added AppKit device metadata and high-rate uncoalesced macOS observation.
 - Added an interactive example, platform-channel tests, controller tests, and
   native capability tests.
+- Added chronological Android `MotionEvent` history, nanosecond timestamps on
+  API 34+, input-device lifecycle metadata, and cancelled-palm handling.
+- Added replaceable motion predictions through UIKit and AndroidX Input.
+- Added Apple Pencil estimated-property identifiers and definitive correction
+  events without mixing them into the authoritative motion stream.
+- Added an experimental opt-in Windows App SDK `PointerPredictor` backend with
+  pinned NuGet dependencies and a runtime-safe Windows Ink fallback.
+- Added a federated Web backend with raw/coalesced Pointer Events, precise pen
+  axes, session-scoped Level 4 device identifiers, browser-predicted
+  trajectories, and an opt-in delegated Ink API trail.

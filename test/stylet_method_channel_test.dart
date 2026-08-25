@@ -8,8 +8,11 @@ import 'package:stylet/stylet_method_channel.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const MethodChannel methodChannel = MethodChannel('dev.focale.stylet/methods');
-  final TestDefaultBinaryMessenger messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  const MethodChannel methodChannel = MethodChannel(
+    'dev.focale.stylet/methods',
+  );
+  final TestDefaultBinaryMessenger messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
 
   tearDown(() => messenger.setMockMethodCallHandler(methodChannel, null));
 
@@ -21,6 +24,7 @@ void main() {
       'tool': 'eraser',
       'pointerIdentifier': 7,
       'nativeDeviceIdentifier': 'tablet:42',
+      'sampleIdentifier': 'sample:9',
       'x': 10.5,
       'y': 20,
       'buttons': kPrimaryStylusButton,
@@ -34,17 +38,108 @@ void main() {
       'tangentialPressure': -0.5,
       'wheelDelta': 0.125,
       'features': ['pressure', 'barrelRotation', 'tangentialPressure', 'wheel'],
+      'estimatedProperties': ['pressure'],
+      'propertiesExpectingUpdates': ['pressure'],
     });
 
     check(decoded).isA<StylusMotionEvent>()
       ..has((event) => event.phase, 'phase').equals(StylusPhase.move)
       ..has((event) => event.tool, 'tool').equals(StylusTool.eraser)
-      ..has((event) => event.position, 'position').equals(const Offset(10.5, 20))
+      ..has(
+        (event) => event.position,
+        'position',
+      ).equals(const Offset(10.5, 20))
       ..has((event) => event.barrelRotation, 'barrelRotation').equals(2.4)
-      ..has((event) => event.tangentialPressure, 'tangentialPressure').equals(-0.5)
+      ..has(
+        (event) => event.tangentialPressure,
+        'tangentialPressure',
+      ).equals(-0.5)
       ..has((event) => event.wheelDelta, 'wheelDelta').equals(0.125)
-      ..has((event) => event.nativeDeviceIdentifier, 'nativeDeviceIdentifier').equals('tablet:42');
+      ..has(
+        (event) => event.nativeDeviceIdentifier,
+        'nativeDeviceIdentifier',
+      ).equals('tablet:42')
+      ..has(
+        (event) => event.sampleIdentifier,
+        'sampleIdentifier',
+      ).equals('sample:9')
+      ..has(
+        (event) => event.estimatedProperties,
+        'estimatedProperties',
+      ).contains(StylusSampleProperty.pressure)
+      ..has(
+        (event) => event.expectsPropertyUpdates,
+        'expectsPropertyUpdates',
+      ).isTrue();
   });
+
+  test(
+    'decodes replaceable predictions and estimated-property corrections',
+    () {
+      final List<StyletEvent> predictionEvents = decodeStyletEvents({
+        'type': 'prediction',
+        'timestampMicros': 4000,
+        'pointerIdentifier': 7,
+        'deviceIdentifier': 3,
+        'nativeDeviceIdentifier': 'pen:3',
+        'samples': [
+          {
+            'type': 'motion',
+            'timestampMicros': 4100,
+            'phase': 'move',
+            'x': 4,
+            'y': 5,
+            'pressure': 0.4,
+          },
+          {
+            'type': 'motion',
+            'timestampMicros': 4200,
+            'phase': 'move',
+            'x': 6,
+            'y': 7,
+            'pressure': 0.5,
+          },
+        ],
+      }).toList();
+      final StyletEvent correction = decodeStyletEvent({
+        'type': 'correction',
+        'timestampMicros': 5000,
+        'sampleIdentifier': 'sample:9',
+        'correctedProperties': ['pressure', 'orientation'],
+        'sample': {
+          'type': 'motion',
+          'timestampMicros': 3900,
+          'phase': 'move',
+          'sampleIdentifier': 'sample:9',
+          'x': 3,
+          'y': 4,
+          'pressure': 0.75,
+        },
+      });
+
+      check(predictionEvents.single).isA<StylusPredictionEvent>()
+        ..has((event) => event.pointerIdentifier, 'pointerIdentifier').equals(7)
+        ..has((event) => event.samples, 'samples').length.equals(2)
+        ..has(
+          (event) => event.samples.last.position,
+          'last.position',
+        ).equals(const Offset(6, 7))
+        ..has((event) => event.clearsPrevious, 'clearsPrevious').isFalse();
+      check(correction).isA<StylusCorrectionEvent>()
+        ..has(
+          (event) => event.sampleIdentifier,
+          'sampleIdentifier',
+        ).equals('sample:9')
+        ..has(
+          (event) => event.correctedSample.pressure,
+          'correctedSample.pressure',
+        ).equals(0.75)
+        ..has(
+          (event) => event.correctedProperties,
+          'correctedProperties',
+        ).contains(StylusSampleProperty.orientation);
+    },
+  );
 
   test('decodes a squeeze with its hover pose', () {
     final StyletEvent decoded = decodeStyletEvent({
@@ -52,14 +147,27 @@ void main() {
       'timestampMicros': 9000,
       'action': 'squeeze',
       'phase': 'ended',
-      'pose': {'x': 4, 'y': 8, 'distance': 0.3, 'tilt': 0.4, 'orientation': 0.5, 'barrelRotation': 0.6},
+      'pose': {
+        'x': 4,
+        'y': 8,
+        'distance': 0.3,
+        'tilt': 0.4,
+        'orientation': 0.5,
+        'barrelRotation': 0.6,
+      },
     });
 
     check(decoded).isA<StylusActionEvent>()
       ..has((event) => event.action, 'action').equals(StylusAction.squeeze)
       ..has((event) => event.phase, 'phase').equals(StylusActionPhase.ended)
-      ..has((event) => event.pose?.position, 'pose.position').equals(const Offset(4, 8))
-      ..has((event) => event.pose?.barrelRotation, 'pose.barrelRotation').equals(0.6);
+      ..has(
+        (event) => event.pose?.position,
+        'pose.position',
+      ).equals(const Offset(4, 8))
+      ..has(
+        (event) => event.pose?.barrelRotation,
+        'pose.barrelRotation',
+      ).equals(0.6);
   });
 
   test('expands historical batches and decodes device and pad events', () {
@@ -103,9 +211,15 @@ void main() {
 
     check(decoded).length.equals(3);
     check(decoded.first).isA<StylusDeviceEvent>()
-      ..has((event) => event.device.name, 'device.name').equals('Drawing tablet')
+      ..has(
+        (event) => event.device.name,
+        'device.name',
+      ).equals('Drawing tablet')
       ..has((event) => event.device.buttonCount, 'device.buttonCount').equals(8)
-      ..has((event) => event.device.features, 'device.features').contains(StylusFeature.tabletPadRing);
+      ..has(
+        (event) => event.device.features,
+        'device.features',
+      ).contains(StylusFeature.tabletPadRing);
     check(decoded[1]).isA<TabletPadEvent>()
       ..has((event) => event.control, 'control').equals(TabletPadControl.ring)
       ..has((event) => event.value, 'value').equals(0.25)
@@ -118,18 +232,36 @@ void main() {
 
   test('expands a top-level native event list', () {
     final List<StyletEvent> decoded = decodeStyletEvents([
-      {'type': 'motion', 'timestampMicros': 1, 'phase': 'hover', 'x': 1, 'y': 2},
+      {
+        'type': 'motion',
+        'timestampMicros': 1,
+        'phase': 'hover',
+        'x': 1,
+        'y': 2,
+      },
       {'type': 'motion', 'timestampMicros': 2, 'phase': 'move', 'x': 2, 'y': 3},
     ]).toList();
 
     check(decoded).length.equals(2);
-    check(decoded.first).isA<StylusMotionEvent>().has((event) => event.phase, 'phase').equals(StylusPhase.hover);
-    check(decoded.last).isA<StylusMotionEvent>().has((event) => event.phase, 'phase').equals(StylusPhase.move);
+    check(decoded.first)
+        .isA<StylusMotionEvent>()
+        .has((event) => event.phase, 'phase')
+        .equals(StylusPhase.hover);
+    check(decoded.last)
+        .isA<StylusMotionEvent>()
+        .has((event) => event.phase, 'phase')
+        .equals(StylusPhase.move);
   });
 
   test('rejects malformed native values', () {
     check(
-      () => decodeStyletEvent({'type': 'motion', 'timestampMicros': 1, 'phase': 'impossible', 'x': 0, 'y': 0}),
+      () => decodeStyletEvent({
+        'type': 'motion',
+        'timestampMicros': 1,
+        'phase': 'impossible',
+        'x': 0,
+        'y': 0,
+      }),
     ).throws<FormatException>();
     check(
       () => decodeStyletEvent({
@@ -160,6 +292,21 @@ void main() {
         'buttonCount': -1,
       }),
     ).throws<FormatException>();
+    check(
+      () => decodeStyletEvent({
+        'type': 'correction',
+        'timestampMicros': 1,
+        'sampleIdentifier': 'a',
+        'sample': {
+          'type': 'motion',
+          'timestampMicros': 1,
+          'phase': 'move',
+          'sampleIdentifier': 'b',
+          'x': 0,
+          'y': 0,
+        },
+      }),
+    ).throws<FormatException>();
   });
 
   test('combines native capabilities with portable Flutter input', () async {
@@ -167,7 +314,9 @@ void main() {
       check(call.method).equals('getCapabilities');
       return ['barrelRotation', 'squeeze'];
     });
-    final MethodChannelStylet platform = MethodChannelStylet(methodChannel: methodChannel);
+    final MethodChannelStylet platform = MethodChannelStylet(
+      methodChannel: methodChannel,
+    );
 
     final StylusCapabilities capabilities = await platform.getCapabilities();
 
@@ -177,7 +326,9 @@ void main() {
   });
 
   test('falls back to portable capabilities without a native plugin', () async {
-    final MethodChannelStylet platform = MethodChannelStylet(methodChannel: methodChannel);
+    final MethodChannelStylet platform = MethodChannelStylet(
+      methodChannel: methodChannel,
+    );
 
     final StylusCapabilities capabilities = await platform.getCapabilities();
 

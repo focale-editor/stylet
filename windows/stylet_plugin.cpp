@@ -1,6 +1,7 @@
 #include "stylet_plugin.h"
 
 #include "stylet_wintab.h"
+#include "stylet_windows_prediction.h"
 
 #include <flutter/event_stream_handler_functions.h>
 #include <flutter/standard_method_codec.h>
@@ -107,6 +108,12 @@ StyletPlugin::StyletPlugin(flutter::PluginRegistrarWindows* registrar)
     view_window_ = registrar_->GetView()->GetNativeWindow();
   }
   wintab_backend_ = std::make_unique<WintabBackend>(view_window_);
+  prediction_backend_ = std::make_unique<WindowsPredictionBackend>(
+      view_window_, [this](flutter::EncodableMap packet) {
+        if (event_sink_ != nullptr) {
+          event_sink_->Success(flutter::EncodableValue(std::move(packet)));
+        }
+      });
 }
 
 StyletPlugin::~StyletPlugin() {
@@ -142,11 +149,13 @@ void StyletPlugin::RegisterWithRegistrar(
               flutter::StreamHandlerError<flutter::EncodableValue>> {
         plugin_pointer->wintab_backend_->ClearSamples();
         plugin_pointer->event_sink_ = std::move(events);
+        plugin_pointer->prediction_backend_->SetListening(true);
         return nullptr;
       },
       [plugin_pointer](const flutter::EncodableValue* /*arguments*/)
           -> std::unique_ptr<
               flutter::StreamHandlerError<flutter::EncodableValue>> {
+        plugin_pointer->prediction_backend_->SetListening(false);
         plugin_pointer->event_sink_.reset();
         plugin_pointer->last_positions_.clear();
         plugin_pointer->announced_devices_.clear();
@@ -255,6 +264,9 @@ void StyletPlugin::AnnounceDevice(const POINTER_PEN_INFO& pen_info) {
   };
   if (wintab_backend_->supports_tangential_pressure()) {
     features.emplace_back("tangentialPressure");
+  }
+  if (prediction_backend_->is_available()) {
+    features.emplace_back("predictedSamples");
   }
   flutter::EncodableMap packet;
   SetValue(&packet, "type", flutter::EncodableValue("device"));
@@ -403,6 +415,9 @@ flutter::EncodableList StyletPlugin::GetCurrentCapabilities() const {
   flutter::EncodableList capabilities = GetCapabilities();
   if (wintab_backend_->supports_tangential_pressure()) {
     capabilities.emplace_back("tangentialPressure");
+  }
+  if (prediction_backend_->is_available()) {
+    capabilities.emplace_back("predictedSamples");
   }
   return capabilities;
 }

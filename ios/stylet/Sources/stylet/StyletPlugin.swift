@@ -9,12 +9,24 @@ private let eventChannelName = "dev.focale.stylet/events"
 
 /// Observes Apple Pencil touches without claiming or cancelling Flutter input.
 private final class PencilObservationGestureRecognizer: UIGestureRecognizer {
-  /// Callback invoked for every real or coalesced Apple Pencil sample.
-  private let observer: (UITouch) -> Void
+  /// Callback invoked with the stable touch and one chronological real batch.
+  private let sampleObserver: (UITouch, [UITouch]) -> Void
 
-  /// Creates a passive recognizer that forwards samples to `observer`.
-  init(observer: @escaping (UITouch) -> Void) {
-    self.observer = observer
+  /// Callback invoked with each atomic replacement prediction.
+  private let predictionObserver: (UITouch, [UITouch]) -> Void
+
+  /// Callback invoked when UIKit refines previously estimated properties.
+  private let correctionObserver: (Set<UITouch>) -> Void
+
+  /// Creates a passive recognizer with callbacks for every high-fidelity path.
+  init(
+    sampleObserver: @escaping (UITouch, [UITouch]) -> Void,
+    predictionObserver: @escaping (UITouch, [UITouch]) -> Void,
+    correctionObserver: @escaping (Set<UITouch>) -> Void
+  ) {
+    self.sampleObserver = sampleObserver
+    self.predictionObserver = predictionObserver
+    self.correctionObserver = correctionObserver
     super.init(target: nil, action: nil)
     allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
     cancelsTouchesInView = false
@@ -40,13 +52,16 @@ private final class PencilObservationGestureRecognizer: UIGestureRecognizer {
     state = .failed
   }
 
+  override func touchesEstimatedPropertiesUpdated(_ touches: Set<UITouch>) {
+    correctionObserver(Set(touches.filter { touch in touch.type == .pencil }))
+  }
+
   /// Forwards coalesced samples in chronological order when UIKit provides them.
   private func observe(_ touches: Set<UITouch>, with event: UIEvent) {
     for touch in touches where touch.type == .pencil {
       let samples = event.coalescedTouches(for: touch) ?? [touch]
-      for sample in samples {
-        observer(sample)
-      }
+      sampleObserver(touch, samples)
+      predictionObserver(touch, event.predictedTouches(for: touch) ?? [])
     }
   }
 }
@@ -81,6 +96,12 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
 
   /// Latest Apple Pencil hover position, used to calculate hover deltas.
   private var lastHoverPosition: CGPoint?
+
+  /// Original packets retained until every promised property update arrives.
+  private var pendingEstimatePackets: [String: [String: Any]] = [:]
+
+  /// Property updates still expected for each retained sample identifier.
+  private var pendingEstimateProperties: [String: UITouch.Properties] = [:]
 
   /// Creates a channel backend associated with Flutter's root view.
   private init(binaryMessenger: FlutterBinaryMessenger, view: UIView?) {
@@ -119,6 +140,9 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       "primaryButton",
       "hover",
       "doubleTap",
+      "historicalSamples",
+      "predictedSamples",
+      "estimatedPropertyUpdates",
     ]
     if #available(iOS 17.5, *) {
       features.append("barrelRotation")
@@ -226,9 +250,17 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
     guard touchRecognizer == nil, let view else {
       return
     }
-    let recognizer = PencilObservationGestureRecognizer { [weak self] touch in
-      self?.sendMotion(for: touch)
-    }
+    let recognizer = PencilObservationGestureRecognizer(
+      sampleObserver: { [weak self] touch, samples in
+        self?.sendMotions(for: samples, touchIdentifier: ObjectIdentifier(touch))
+      },
+      predictionObserver: { [weak self] touch, samples in
+        self?.sendPrediction(for: touch, samples: samples)
+      },
+      correctionObserver: { [weak self] touches in
+        self?.sendCorrections(for: touches)
+      }
+    )
     view.addGestureRecognizer(recognizer)
     touchRecognizer = recognizer
 
@@ -262,25 +294,151 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
     pencilInteraction = nil
     lastPositions.removeAll()
     lastHoverPosition = nil
+    pendingEstimatePackets.removeAll()
+    pendingEstimateProperties.removeAll()
   }
 
-  /// Emits one normalized motion packet for an Apple Pencil touch sample.
-  private func sendMotion(for touch: UITouch) {
+  /// Emits one chronological Apple Pencil batch and retains pending estimates.
+  private func sendMotions(
+    for touches: [UITouch],
+    touchIdentifier: ObjectIdentifier
+  ) {
+    guard let eventSink, let view else {
+      return
+    }
+    var previousPosition = lastPositions[touchIdentifier]
+    var packets: [[String: Any]] = []
+    for touch in touches {
+      guard let packet = motionPacket(
+        for: touch,
+        touchIdentifier: touchIdentifier,
+        previousPosition: previousPosition,
+        includesEstimationMetadata: true
+      ) else {
+        continue
+      }
+      registerPendingEstimate(for: touch, packet: packet)
+      packets.append(packet)
+      previousPosition = touch.location(in: view)
+    }
+    guard let lastTouch = touches.last, !packets.isEmpty else {
+      return
+    }
+    if packets.count == 1 {
+      eventSink(packets[0])
+    } else {
+      eventSink(["type": "batch", "events": packets])
+    }
+
+    if lastTouch.phase == .ended || lastTouch.phase == .cancelled {
+      lastPositions.removeValue(forKey: touchIdentifier)
+    } else if let previousPosition {
+      lastPositions[touchIdentifier] = previousPosition
+    }
+  }
+
+  /// Emits one prediction packet that atomically replaces the preceding preview.
+  private func sendPrediction(for touch: UITouch, samples: [UITouch]) {
     guard let eventSink, let view, touch.type == .pencil else {
       return
     }
-    let identifier = ObjectIdentifier(touch)
+    let touchIdentifier = ObjectIdentifier(touch)
+    var previousPosition = lastPositions[touchIdentifier] ?? touch.location(in: view)
+    var packets: [[String: Any]] = []
+    for sample in samples {
+      guard let packet = motionPacket(
+        for: sample,
+        touchIdentifier: touchIdentifier,
+        previousPosition: previousPosition,
+        includesEstimationMetadata: false
+      ) else {
+        continue
+      }
+      packets.append(packet)
+      previousPosition = sample.location(in: view)
+    }
+    eventSink([
+      "type": "prediction",
+      "timestampMicros": Int64((touch.timestamp * 1_000_000).rounded()),
+      "pointerIdentifier": touchIdentifier.hashValue,
+      "deviceIdentifier": 0,
+      "nativeDeviceIdentifier": "apple-pencil",
+      "samples": packets,
+    ])
+  }
+
+  /// Emits complete corrected samples for every estimated-property notification.
+  private func sendCorrections(for touches: Set<UITouch>) {
+    guard let eventSink else {
+      return
+    }
+    for touch in touches {
+      guard let identifier = sampleIdentifier(for: touch),
+        let originalPacket = pendingEstimatePackets[identifier],
+        let previouslyExpected = pendingEstimateProperties[identifier]
+      else {
+        continue
+      }
+      let originalX = originalPacket["x"] as? Double ?? 0
+      let originalY = originalPacket["y"] as? Double ?? 0
+      let originalDeltaX = originalPacket["deltaX"] as? Double ?? 0
+      let originalDeltaY = originalPacket["deltaY"] as? Double ?? 0
+      let previousPosition = CGPoint(
+        x: originalX - originalDeltaX,
+        y: originalY - originalDeltaY
+      )
+      guard var correctedPacket = motionPacket(
+        for: touch,
+        touchIdentifier: ObjectIdentifier(touch),
+        previousPosition: previousPosition,
+        includesEstimationMetadata: true
+      ) else {
+        continue
+      }
+      for key in ["timestampMicros", "phase", "buttons", "isDown"] {
+        correctedPacket[key] = originalPacket[key]
+      }
+      let stillExpected = touch.estimatedPropertiesExpectingUpdates
+      let correctedProperties = previouslyExpected.subtracting(stillExpected)
+      eventSink([
+        "type": "correction",
+        "timestampMicros": Int64(
+          (ProcessInfo.processInfo.systemUptime * 1_000_000).rounded()
+        ),
+        "sampleIdentifier": identifier,
+        "correctedProperties": propertyNames(for: correctedProperties),
+        "sample": correctedPacket,
+      ])
+
+      if stillExpected.isEmpty {
+        pendingEstimatePackets.removeValue(forKey: identifier)
+        pendingEstimateProperties.removeValue(forKey: identifier)
+      } else {
+        pendingEstimatePackets[identifier] = correctedPacket
+        pendingEstimateProperties[identifier] = stillExpected
+      }
+    }
+  }
+
+  /// Builds one motion map without mutating pointer correlation state.
+  private func motionPacket(
+    for touch: UITouch,
+    touchIdentifier: ObjectIdentifier,
+    previousPosition: CGPoint?,
+    includesEstimationMetadata: Bool
+  ) -> [String: Any]? {
+    guard let view, touch.type == .pencil else {
+      return nil
+    }
     let position = touch.location(in: view)
-    let previousPosition = lastPositions[identifier]
     let isDown = touch.phase == .began || touch.phase == .moved || touch.phase == .stationary
-    let tilt = (.pi / 2) - touch.altitudeAngle
     var features = ["pressure", "tilt", "orientation", "primaryButton"]
     var packet: [String: Any] = [
       "type": "motion",
       "timestampMicros": Int64((touch.timestamp * 1_000_000).rounded()),
       "phase": phaseName(for: touch.phase),
       "tool": "pen",
-      "pointerIdentifier": identifier.hashValue,
+      "pointerIdentifier": touchIdentifier.hashValue,
       "deviceIdentifier": 0,
       "nativeDeviceIdentifier": "apple-pencil",
       "x": Double(position.x),
@@ -292,7 +450,7 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       "pressure": Double(touch.force),
       "pressureMinimum": 0.0,
       "pressureMaximum": Double(touch.maximumPossibleForce),
-      "tilt": Double(tilt),
+      "tilt": Double((.pi / 2) - touch.altitudeAngle),
       "orientation": Double(touch.azimuthAngle(in: view)),
     ]
     if #available(iOS 17.5, *) {
@@ -300,13 +458,61 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       features.append("barrelRotation")
     }
     packet["features"] = features
-    eventSink(packet)
-
-    if touch.phase == .ended || touch.phase == .cancelled {
-      lastPositions.removeValue(forKey: identifier)
-    } else {
-      lastPositions[identifier] = position
+    if includesEstimationMetadata {
+      if let identifier = sampleIdentifier(for: touch) {
+        packet["sampleIdentifier"] = identifier
+      }
+      let estimatedProperties = propertyNames(for: touch.estimatedProperties)
+      if !estimatedProperties.isEmpty {
+        packet["estimatedProperties"] = estimatedProperties
+      }
+      let expectedProperties = propertyNames(
+        for: touch.estimatedPropertiesExpectingUpdates
+      )
+      if !expectedProperties.isEmpty {
+        packet["propertiesExpectingUpdates"] = expectedProperties
+      }
     }
+    return packet
+  }
+
+  /// Retains [packet] when UIKit promises later values for [touch].
+  private func registerPendingEstimate(for touch: UITouch, packet: [String: Any]) {
+    let expectedProperties = touch.estimatedPropertiesExpectingUpdates
+    guard !expectedProperties.isEmpty, let identifier = sampleIdentifier(for: touch) else {
+      return
+    }
+    pendingEstimatePackets[identifier] = packet
+    pendingEstimateProperties[identifier] = expectedProperties
+  }
+
+  /// Returns the platform-channel identifier for one estimable touch sample.
+  private func sampleIdentifier(for touch: UITouch) -> String? {
+    guard let index = touch.estimationUpdateIndex else {
+      return nil
+    }
+    return "apple-pencil:\(index.stringValue)"
+  }
+
+  /// Converts a UIKit estimated-property mask into Stylet field names.
+  private func propertyNames(for properties: UITouch.Properties) -> [String] {
+    var names: [String] = []
+    if properties.contains(.location) {
+      names.append("position")
+    }
+    if properties.contains(.force) {
+      names.append("pressure")
+    }
+    if properties.contains(.altitude) {
+      names.append("tilt")
+    }
+    if properties.contains(.azimuth) {
+      names.append("orientation")
+    }
+    if #available(iOS 17.5, *), properties.contains(.roll) {
+      names.append("barrelRotation")
+    }
+    return names
   }
 
   /// Emits one normalized Apple Pencil body-action packet.

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="screenshots/overview.png" alt="Stylet package illustration" width="180">
+</p>
+
 # Stylet
 
 High-fidelity stylus input for Flutter on Android, iOS, Linux, macOS, Web, and
@@ -22,8 +26,7 @@ Add Stylet to the consuming application's `pubspec.yaml`:
 flutter pub add stylet
 ```
 
-Then run `flutter pub get`. A hosted or Git dependency can replace the local
-path without changing the API.
+Then run `flutter pub get`.
 
 ## Quick start
 
@@ -52,6 +55,9 @@ StyletListener(
     );
   },
   onAction: (StylusActionEvent event) {
+    if (event.preferredAction == StylusPreferredAction.switchEraser) {
+      toggleEraser();
+    }
     if (event.action == StylusAction.squeeze &&
         event.phase == StylusActionPhase.began) {
       showToolPalette(at: event.pose?.position);
@@ -112,16 +118,14 @@ Predictions are temporary previews. Each event replaces the preceding preview
 for its pointer, including an empty sample list that clears it:
 
 ```dart
-final StreamSubscription<StylusPredictionEvent> predictions =
-    Stylet.instance.predictions.listen((event) {
+final StreamSubscription<StylusPredictionEvent> predictions = Stylet.instance.predictions.listen((event) {
   replacePredictedPath(
     pointerIdentifier: event.pointerIdentifier,
     samples: event.samples,
   );
 });
 
-final StreamSubscription<StylusCorrectionEvent> corrections =
-    Stylet.instance.corrections.listen((event) {
+final StreamSubscription<StylusCorrectionEvent> corrections = Stylet.instance.corrections.listen((event) {
   replaceRecordedSample(
     identifier: event.sampleIdentifier,
     sample: event.correctedSample,
@@ -173,26 +177,43 @@ Cancel application-owned subscriptions with their lifecycle. Linux reports
 pad buttons, rings, strips, and mapping modes through Wayland tablet-v2 or GTK;
 relative dials require tablet-v2 version 2.
 
+Wacom controls on macOS and Wintab controls on Windows require the application
+to replace the driver's current per-application mappings. Enable that behavior
+only while your editing surface is ready to consume the events:
+
+```dart
+final bool controlsClaimed = await Stylet.instance.setTabletPadOverrideEnabled(enabled: true);
+
+// Release explicitly when leaving the editing experience. Cancelling Stylet's
+// native event stream or unloading the plugin also restores the driver.
+await Stylet.instance.setTabletPadOverrideEnabled(enabled: false);
+```
+
+The call returns `false` when there is no compatible driver/control or when the
+platform uses passive pad delivery. macOS applications must also provide the
+Automation usage description and entitlement described in
+[`docs/native_backends.md`](docs/native_backends.md).
+
 ## Platform support
 
-| Feature                     | Android          | iOS/iPadOS                  | Linux                       | macOS                  | Web                         | Windows                     |
-|-----------------------------|------------------|-----------------------------|-----------------------------|------------------------|-----------------------------|-----------------------------|
-| Pressure, tilt, orientation | Yes              | Yes                         | Yes                         | Yes                    | Pointer Events              | Yes                         |
-| Hover pose                  | Yes              | iPadOS 16.1+                | Yes                         | Yes                    | Pointer Events              | Yes                         |
-| Side buttons                | Yes              | —                           | Yes                         | Yes                    | First barrel button         | Yes                         |
-| Eraser tool                 | Yes              | —                           | Yes                         | Yes                    | Pointer Events              | Yes                         |
-| Barrel rotation             | Driver `AXIS_RZ` | iOS 17.5+                   | GTK or tablet-v2            | AppKit rotation        | `PointerEvent.twist`        | Windows Ink                 |
-| Tangential pressure         | —                | —                           | GTK or tablet-v2            | AppKit barrel pressure | Pointer Events              | Wintab driver, when present |
-| Stylus wheel                | —                | —                           | Wayland tablet-v2           | —                      | —                           | —                           |
-| High-rate sample delivery   | Motion history   | Coalesced touches            | Protocol frames             | Coalescing disabled    | Coalesced/raw updates       | Windows Ink history batches |
-| Predicted trajectories      | AndroidX Input   | UIKit                       | —                           | —                      | Browser, when available     | Experimental opt-in         |
-| Delegated compositor trail  | —                | —                           | —                           | —                      | Experimental Ink API       | —                           |
-| Estimated-value corrections | —                | UIKit                       | —                           | —                      | —                           | —                           |
-| Device identity / metadata  | InputManager     | —                           | GTK or tablet-v2            | AppKit                 | PE4 session ID, if available | Windows Ink              |
-| Pad buttons, rings, strips  | —                | —                           | GTK or tablet-v2            | —                      | —                           | —                           |
-| Relative pad dials          | —                | —                           | Tablet-v2 version 2         | —                      | —                           | —                           |
-| Double-tap                  | —                | Apple Pencil                | —                           | —                      | —                           | —                           |
-| Squeeze                     | —                | iOS 17.5+, Apple Pencil Pro | —                           | —                      | —                           | —                           |
+| Feature                     | Android          | iOS/iPadOS                  | Linux                                | macOS                      | Web                          | Windows                     |
+|-----------------------------|------------------|-----------------------------|--------------------------------------|----------------------------|------------------------------|-----------------------------|
+| Pressure, tilt, orientation | Yes              | Yes                         | Yes                                  | Yes                        | Pointer Events               | Yes                         |
+| Hover pose                  | Yes              | iPadOS 16.1+                | Yes                                  | Yes                        | Pointer Events               | Yes                         |
+| Side buttons                | Yes              | No Apple Pencil button API  | Yes                                  | Yes                        | First barrel button          | Yes                         |
+| Eraser tool                 | Yes              | `switchEraser` preference   | Yes                                  | Yes                        | Pointer Events               | Yes                         |
+| Barrel rotation             | Driver `AXIS_RZ` | iOS 17.5+                   | GTK or tablet-v2                     | AppKit rotation            | `PointerEvent.twist`         | Windows Ink                 |
+| Tangential pressure         | —                | —                           | GTK or tablet-v2                     | AppKit barrel pressure     | Pointer Events               | Wintab driver, when present |
+| Stylus wheel                | —                | —                           | Wayland tablet-v2                    | —                          | —                            | —                           |
+| High-rate sample delivery   | Motion history   | Coalesced touches           | Protocol frames                      | Coalescing disabled        | Coalesced/raw updates        | Windows Ink history batches |
+| Predicted trajectories      | AndroidX Input   | UIKit                       | —                                    | —                          | Browser, when available      | Experimental opt-in         |
+| Delegated compositor trail  | —                | —                           | —                                    | —                          | Experimental Ink API         | —                           |
+| Estimated-value corrections | —                | UIKit                       | —                                    | —                          | —                            | —                           |
+| Device identity / metadata  | InputManager     | —                           | GTK or tablet-v2                     | AppKit                     | PE4 session ID, if available | Windows Ink                 |
+| Pad buttons, rings, strips  | —                | —                           | GTK or tablet-v2 + libwacom metadata | Wacom DRI, explicit opt-in | —                            | Wintab, explicit opt-in     |
+| Relative pad dials          | —                | —                           | Tablet-v2 version 2                  | —                          | —                            | —                           |
+| Double-tap                  | —                | Apple Pencil + preference   | —                                    | Sidecar / AppKit           | —                            | —                           |
+| Squeeze                     | —                | iOS 17.5+, Apple Pencil Pro | —                                    | —                          | —                            | —                           |
 
 Hardware and tablet drivers determine whether an advertised axis produces
 meaningful values. Every backend observes input passively and returns the
@@ -213,3 +234,7 @@ Web Pointer Events and delegated ink behavior are detailed in
 The runnable application in [`example/`](example/) visualizes capabilities,
 pressure, tilt, barrel angle, stylus-wheel movement, side buttons, body
 actions, predictions, corrections, native devices, and tablet-pad controls.
+
+---
+
+Built for **[Focale](https://focale-editor.app)**, an advanced local image editor. Discover what these packages make possible in a real creative workflow.

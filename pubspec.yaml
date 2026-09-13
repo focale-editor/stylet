@@ -4,6 +4,17 @@ version: 0.1.1
 homepage: https://github.com/focale-editor/stylet
 repository: https://github.com/focale-editor/stylet
 
+topics:
+  - stylus
+  - pen
+  - input
+  - drawing
+  - flutter-plugin
+
+screenshots:
+  - description: 'A flat illustration of rich cross-platform stylus input.'
+    path: screenshots/overview.png
+
 environment:
   sdk: '>=3.13.0 <4.0.0'
   flutter: '>=3.47.0'

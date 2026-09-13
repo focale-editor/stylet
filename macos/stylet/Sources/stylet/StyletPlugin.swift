@@ -1,5 +1,8 @@
 import Cocoa
 import FlutterMacOS
+#if SWIFT_PACKAGE
+import StyletWacomBridge
+#endif
 
 /// Method-channel name shared with Stylet's Dart backend.
 private let methodChannelName = "app.focaleeditor.stylet/methods"
@@ -35,6 +38,13 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
   /// Mouse-coalescing state restored when high-rate observation stops.
   private var previousMouseCoalescingState: Bool?
+
+  /// Explicitly activated Wacom DRI bridge for tablet-pad controls.
+  private lazy var wacomControls = StyletWacomControls(
+    packetHandler: { [weak self] packet in
+      self?.eventSink?(packet)
+    }
+  )
 
   /// Features supplied for every AppKit tablet-tool description.
   private static let deviceFeatureNames: [String] = [
@@ -79,24 +89,44 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     instance.eventChannel.setStreamHandler(instance)
   }
 
-  /// Handles capability requests from the Dart backend.
+  /// Handles capability and explicit tablet-control requests from Dart.
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-    guard call.method == "getCapabilities" else {
+    switch call.method {
+    case "getCapabilities":
+      result([
+        "pressure",
+        "tilt",
+        "orientation",
+        "barrelRotation",
+        "tangentialPressure",
+        "primaryButton",
+        "secondaryButton",
+        "eraser",
+        "hover",
+        "doubleTap",
+        "deviceInfo",
+        "tabletPadButtons",
+        "tabletPadRing",
+        "tabletPadStrip",
+      ])
+    case "setTabletPadOverrideEnabled":
+      guard
+        let arguments = call.arguments as? [String: Any],
+        let enabled = arguments["enabled"] as? Bool
+      else {
+        result(
+          FlutterError(
+            code: "invalid-arguments",
+            message: "Expected a boolean 'enabled' argument.",
+            details: nil
+          )
+        )
+        return
+      }
+      result(wacomControls.setTabletPadOverrideEnabled(enabled))
+    default:
       result(FlutterMethodNotImplemented)
-      return
     }
-    result([
-      "pressure",
-      "tilt",
-      "orientation",
-      "barrelRotation",
-      "tangentialPressure",
-      "primaryButton",
-      "secondaryButton",
-      "eraser",
-      "hover",
-      "deviceInfo",
-    ])
   }
 
   /// Starts native observation for a Dart event-channel subscription.
@@ -105,14 +135,15 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     eventSink events: @escaping FlutterEventSink
   ) -> FlutterError? {
     eventSink = events
+    wacomControls.setListening(true)
     startMonitoring()
     return nil
   }
 
   /// Stops native observation when the Dart subscription is cancelled.
   public func onCancel(withArguments arguments: Any?) -> FlutterError? {
-    eventSink = nil
     stopMonitoring()
+    eventSink = nil
     return nil
   }
 
@@ -134,6 +165,7 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
       .otherMouseDown,
       .otherMouseDragged,
       .otherMouseUp,
+      .changeMode,
     ]
     eventMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
       self?.observe(event: event)
@@ -145,6 +177,8 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
   /// Removes the AppKit event monitor and clears correlation state.
   private func stopMonitoring() {
+    wacomControls.setListening(false)
+    _ = wacomControls.setTabletPadOverrideEnabled(false)
     if let eventMonitor {
       NSEvent.removeMonitor(eventMonitor)
     }
@@ -160,6 +194,12 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
   /// Filters one AppKit event and emits it when it belongs to a tablet tool.
   private func observe(event: NSEvent) {
+    // Sidecar turns an Apple Pencil double tap into AppKit's change-mode event.
+    // Observe it without consuming it, like every other Stylet desktop event.
+    if event.type == .changeMode {
+      sendAction(action: "doubleTap", event: event)
+      return
+    }
     guard let view, isTabletEvent(event: event) else {
       return
     }
@@ -167,6 +207,19 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
       return
     }
     sendMotion(event: event, in: view)
+  }
+
+  /// Emits a discrete stylus-body interaction reported by AppKit.
+  private func sendAction(action: String, event: NSEvent) {
+    guard let eventSink else {
+      return
+    }
+    eventSink([
+      "type": "action",
+      "timestampMicros": Int64((event.timestamp * 1_000_000).rounded()),
+      "action": action,
+      "phase": "discrete",
+    ])
   }
 
   /// Emits one normalized motion packet for an AppKit tablet event.

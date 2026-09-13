@@ -41,6 +41,14 @@ PencilKit remains outside Stylet because it provides its own canvas, stroke
 model, tools, and renderer. Applications can use PencilKit independently when a
 native drawing surface is desirable without changing the raw-input contract.
 
+Apple Pencil has no separately reported held side button or inverted physical
+eraser end. UIKit instead reports double-tap and, on Apple Pencil Pro, squeeze.
+Stylet now attaches `UIPencilInteraction.preferredTapAction` or
+`preferredSqueezeAction` to those action events. In particular,
+`switchEraser` lets an editor honor the eraser behavior selected in iPadOS
+Settings without misrepresenting it as a second pointer tool. The remaining
+preferences cover the previous tool and the system palettes/shortcut.
+
 ## Linux
 
 GTK 3 remains the universal fallback. It supplies pressure, tilt, distance,
@@ -73,25 +81,28 @@ X11, Stylet transparently continues with GTK. `libinput` is deliberately not
 used directly: compositors own libinput devices and deliver the supported
 application-facing protocol.
 
-`libwacom` is useful to settings applications that need a model database, but
-it is not required for event capture. Stylet prefers identifiers and control
-descriptions reported live by Wayland or GTK, avoiding a model database that
-could disagree with the active driver.
+When `pkg-config` finds libwacom 2.12 or newer, Stylet uses its model database to
+replace generic GTK names and pre-populate pad button, ring, and strip topology.
+It remains metadata only: live GTK or tablet-v2 events are authoritative, and
+an unknown/new model simply retains the runtime description. Distribution
+builds can disable this optional path with
+`-DSTYLET_ENABLE_LIBWACOM=OFF`.
 
 Typical Fedora build dependency:
 
 ```console
-sudo dnf install wayland-devel gtk3-devel
+sudo dnf install wayland-devel gtk3-devel libwacom-devel
 ```
 
 Typical Debian or Ubuntu build dependency:
 
 ```console
-sudo apt install libwayland-dev libgtk-3-dev
+sudo apt install libwayland-dev libgtk-3-dev libwacom-dev
 ```
 
-The plugin still builds without the Wayland development package; only the
-direct tablet-v2 path is omitted. Distribution builds can force the GTK/GDK
+The plugin still builds without either optional development package. Missing
+Wayland headers omit only the direct tablet-v2 path; missing libwacom keeps
+runtime device metadata unchanged. Distribution builds can force the GTK/GDK
 fallback with the CMake option `-DSTYLET_ENABLE_WAYLAND=OFF`.
 
 ## Web
@@ -145,6 +156,13 @@ receive duplicate pointer movements. There is no link-time Wintab dependency
 and Stylet does not redistribute the DLL. Without an installed compatible
 driver, Windows Ink continues unchanged.
 
+The same runtime bridge discovers Wintab 1.4 ExpressKeys, Touch Rings, and Touch
+Strips. Raw control notifications require the driver override exposed by
+`setTabletPadOverrideEnabled`; it is never enabled implicitly. Stylet announces
+one pad device per Wintab tablet, normalizes absolute ring/strip positions, and
+restores every claimed function on opt-out, event-stream cancellation, or
+plugin teardown. No Wintab SDK headers or redistributable DLL are bundled.
+
 Windows App SDK exposes `Microsoft.UI.Input.PointerPredictor`. Stylet can attach
 it to Flutter's ordinary Win32 `HWND` with the experimental
 `InputPointerSource.GetForWindowId` bridge. Because that bridge and its runtime
@@ -177,11 +195,30 @@ temporarily disables AppKit mouse-event coalescing while Dart listens, then
 restores the application's previous setting. This favors complete drawing
 samples without permanently changing global application behavior.
 
-The Wacom Driver Request Interface can override ExpressKeys, Touch Rings, and
-Touch Strips, but doing so replaces the user's per-application driver mappings
-and can trigger Automation permissions. Stylet therefore does not claim those
-controls implicitly. Standard pen data still benefits from an installed Wacom
-driver through AppKit.
+Stylet includes a bridge to the Wacom Driver Request Interface for ExpressKeys,
+Touch Rings, and Touch Strips. It creates blank per-tablet contexts only after
+`setTabletPadOverrideEnabled(enabled: true)`, claims the functions the driver
+marks available, converts distributed control notifications into pad events,
+and destroys every context when released. This replaces the user's active
+per-application Wacom mappings, so it is never implicit. Standard pen data
+continues through AppKit with or without the Wacom bridge.
+
+Sending those Driver Request Interface Apple Events can prompt for Automation
+access. The consuming macOS application must explain the request in
+`NSAppleEventsUsageDescription`; a hardened application also needs the
+`com.apple.security.automation.apple-events` entitlement. App Sandbox applies
+an additional restriction to cross-application Apple Events: a sandboxed host
+must declare an allowed scripting target or the narrowly scoped
+`com.apple.security.temporary-exception.apple-events` entitlement for the
+installed driver's bundle identifier (currently `com.wacom.TabletDriver`), if
+its distribution policy permits that exception. Otherwise leave the pad
+override disabled. A missing usage description, denied permission, missing
+driver, or tablet without overridable controls makes the activation call return
+`false` while AppKit pen input continues normally.
+
+When an iPad and Apple Pencil are used through Sidecar, AppKit translates the
+Pencil double-tap into `NSEvent.EventType.changeMode`. Stylet now emits that as
+the same discrete `doubleTap` action used on iPadOS.
 
 AppKit publishes measured tablet events but has no predicted-event API
 corresponding to UIKit's `predictedTouches(for:)`.
@@ -194,13 +231,19 @@ corresponding to UIKit's `predictedTouches(for:)`.
 - [Experimental HWND input-source bridge](https://learn.microsoft.com/windows/windows-app-sdk/api/winrt/microsoft.ui.input.inputpointersource.getforwindowid)
 - [Windows App SDK downloads](https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)
 - [Wacom Wintab reference](https://developer-docs.wacom.com/docs/icbt/windows/wintab/wintab-reference/)
+- [Wacom macOS Driver Request Interface](https://developer-docs.wacom.com/docs/icbt/macos/dri/dri-basics/)
+- [libwacom device database](https://github.com/linuxwacom/libwacom)
+- [Apple Events entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events)
+- [App Sandbox Apple Event exceptions](https://developer.apple.com/library/archive/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/AppSandboxTemporaryExceptionEntitlements.html)
 - [AppKit tablet events](https://developer.apple.com/documentation/appkit/nsevent)
+- [AppKit change-mode events](https://developer.apple.com/documentation/appkit/nsevent/eventtype/changemode)
 - [AppKit mouse and tablet coalescing](https://developer.apple.com/documentation/appkit/nsevent/ismousecoalescingenabled)
 - [Android motion history](https://developer.android.com/reference/android/view/MotionEvent)
 - [AndroidX motion prediction](https://developer.android.com/jetpack/androidx/releases/input)
 - [Android input devices](https://developer.android.com/reference/android/hardware/input/InputManager)
 - [Android stylus palm rejection](https://developer.android.com/develop/adaptive-apps/cookbook/stylus-palm-rejection)
 - [Apple Pencil input](https://developer.apple.com/documentation/uikit/handling-input-from-apple-pencil)
+- [Apple Pencil preferred actions](https://developer.apple.com/documentation/uikit/uipencilpreferredaction)
 - [UIKit predicted touches](https://developer.apple.com/documentation/uikit/uievent/predictedtouches%28for%3A%29)
 - [Samsung S Pen Remote SDK](https://developer.samsung.com/galaxy-spen-remote/overview.html)
 - [Pointer Events](https://www.w3.org/TR/pointerevents3/)

@@ -14,7 +14,10 @@ Pressure, tilt, barrel rotation, and tablet controls for Flutter.
   s.author           = 'Hugo Delaunay'
 
   s.source           = { :path => '.' }
-  s.source_files = 'stylet/Sources/stylet/**/*'
+  s.source_files = 'stylet/Sources/**/*.{h,m,swift}'
+  s.public_header_files = 'stylet/Sources/StyletWacomBridge/include/*.h'
+  s.requires_arc = true
+  s.frameworks = 'AppKit', 'ApplicationServices'
 
   # If your plugin requires a privacy manifest, for example if it collects user
   # data, update the PrivacyInfo.xcprivacy file to describe your plugin's

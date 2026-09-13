@@ -55,7 +55,8 @@ StyletListener(
     );
   },
   onAction: (StylusActionEvent event) {
-    if (event.preferredAction == StylusPreferredAction.switchEraser) {
+    final bool commitsPreferredAction = event.phase == StylusActionPhase.discrete || event.phase == StylusActionPhase.ended;
+    if (commitsPreferredAction && event.preferredAction == StylusPreferredAction.switchEraser) {
       toggleEraser();
     }
     if (event.action == StylusAction.squeeze &&
@@ -200,8 +201,8 @@ Automation usage description and entitlement described in
 |-----------------------------|------------------|-----------------------------|--------------------------------------|----------------------------|------------------------------|-----------------------------|
 | Pressure, tilt, orientation | Yes              | Yes                         | Yes                                  | Yes                        | Pointer Events               | Yes                         |
 | Hover pose                  | Yes              | iPadOS 16.1+                | Yes                                  | Yes                        | Pointer Events               | Yes                         |
-| Side buttons                | Yes              | No Apple Pencil button API  | Yes                                  | Yes                        | First barrel button          | Yes                         |
-| Eraser tool                 | Yes              | `switchEraser` preference   | Yes                                  | Yes                        | Pointer Events               | Yes                         |
+| Side buttons                | Yes              | No; double-tap/squeeze only | Yes                                  | Yes                        | First barrel button          | Yes                         |
+| Eraser tool                 | Yes              | Virtual via `switchEraser`  | Yes                                  | Yes                        | Pointer Events               | Yes                         |
 | Barrel rotation             | Driver `AXIS_RZ` | iOS 17.5+                   | GTK or tablet-v2                     | AppKit rotation            | `PointerEvent.twist`         | Windows Ink                 |
 | Tangential pressure         | —                | —                           | GTK or tablet-v2                     | AppKit barrel pressure     | Pointer Events               | Wintab driver, when present |
 | Stylus wheel                | —                | —                           | Wayland tablet-v2                    | —                          | —                            | —                           |
@@ -216,8 +217,10 @@ Automation usage description and entitlement described in
 | Squeeze                     | —                | iOS 17.5+, Apple Pencil Pro | —                                    | —                          | —                            | —                           |
 
 Hardware and tablet drivers determine whether an advertised axis produces
-meaningful values. Every backend observes input passively and returns the
-native event unchanged, so Flutter's gesture arena remains authoritative.
+meaningful values. Pen-motion backends observe input passively and return the
+native event unchanged, so Flutter's gesture arena remains authoritative. The
+only active takeover is the explicitly requested Wacom/Wintab pad override
+described above.
 
 The iOS deployment target is 15.0 and the macOS deployment target is 12.0.
 Other targets follow the minimum versions supported by the current Flutter

@@ -137,7 +137,6 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       "pressure",
       "tilt",
       "orientation",
-      "primaryButton",
       "hover",
       "doubleTap",
       "historicalSamples",
@@ -174,6 +173,9 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       action: "doubleTap",
       phase: "discrete",
       timestamp: ProcessInfo.processInfo.systemUptime,
+      preferredAction: preferredActionName(
+        for: UIPencilInteraction.preferredTapAction
+      ),
       pose: nil
     )
   }
@@ -188,6 +190,9 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       action: "doubleTap",
       phase: "discrete",
       timestamp: tap.timestamp,
+      preferredAction: preferredActionName(
+        for: UIPencilInteraction.preferredTapAction
+      ),
       pose: poseMap(from: tap.hoverPose)
     )
   }
@@ -202,6 +207,9 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       action: "squeeze",
       phase: actionPhaseName(for: squeeze.phase),
       timestamp: squeeze.timestamp,
+      preferredAction: preferredActionName(
+        for: UIPencilInteraction.preferredSqueezeAction
+      ),
       pose: poseMap(from: squeeze.hoverPose)
     )
   }
@@ -432,7 +440,7 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
     }
     let position = touch.location(in: view)
     let isDown = touch.phase == .began || touch.phase == .moved || touch.phase == .stationary
-    var features = ["pressure", "tilt", "orientation", "primaryButton"]
+    var features = ["pressure", "tilt", "orientation"]
     var packet: [String: Any] = [
       "type": "motion",
       "timestampMicros": Int64((touch.timestamp * 1_000_000).rounded()),
@@ -520,6 +528,7 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
     action: String,
     phase: String,
     timestamp: TimeInterval,
+    preferredAction: String,
     pose: [String: Any]?
   ) {
     guard let eventSink else {
@@ -530,11 +539,36 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       "timestampMicros": Int64((timestamp * 1_000_000).rounded()),
       "action": action,
       "phase": phase,
+      "preferredAction": preferredAction,
     ]
     if let pose {
       packet["pose"] = pose
     }
     eventSink(packet)
+  }
+
+  /// Converts the behavior selected in iPadOS Settings into Stylet vocabulary.
+  private func preferredActionName(for action: UIPencilPreferredAction) -> String {
+    // Use raw values so this iOS 15-targeted function remains compilable when
+    // newer enum cases carry a later availability annotation in UIKit headers.
+    switch action.rawValue {
+    case 0:
+      return "ignore"
+    case 1:
+      return "switchEraser"
+    case 2:
+      return "switchPrevious"
+    case 3:
+      return "showColorPalette"
+    case 4:
+      return "showInkAttributes"
+    case 5:
+      return "showContextualPalette"
+    case 6:
+      return "runSystemShortcut"
+    default:
+      return "unknown"
+    }
   }
 
   /// Converts a UIKit touch phase into Stylet's cross-platform vocabulary.

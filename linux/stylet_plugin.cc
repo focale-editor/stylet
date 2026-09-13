@@ -13,6 +13,12 @@
 #include "stylet_wayland.h"
 #endif
 
+#ifdef STYLET_HAS_LIBWACOM
+extern "C" {
+#include <libwacom/libwacom.h>
+}
+#endif
+
 /** Casts a GObject instance to StyletPlugin after checking its runtime type. */
 #define STYLET_PLUGIN(obj) \
   (G_TYPE_CHECK_INSTANCE_CAST((obj), stylet_plugin_get_type(), StyletPlugin))
@@ -63,6 +69,9 @@ struct GdkDeviceState {
 
   /** Largest observed one-based pad button count. */
   guint button_count;
+
+  /** Model-database name preferred over a generic GDK device name. */
+  gchar* model_name;
 };
 
 /** Owns channels, GTK handlers, and the latest position used for deltas. */
@@ -114,6 +123,11 @@ struct _StyletPlugin {
 
   /** GTK tool and pad descriptions indexed by their native identifiers. */
   GHashTable* announced_devices;
+
+#ifdef STYLET_HAS_LIBWACOM
+  /** Optional model database used only to enrich live device metadata. */
+  WacomDeviceDatabase* libwacom_database;
+#endif
 
 #ifdef STYLET_HAS_WAYLAND
   /** Optional direct tablet-v2 backend used on compatible Wayland sessions. */
@@ -235,6 +249,69 @@ static guint64 parse_device_identifier(const gchar* value) {
   return end == value ? 0 : result;
 }
 
+/** Releases one cached GTK device description and its optional model name. */
+static void free_gdk_device_state(gpointer data) {
+  GdkDeviceState* state = static_cast<GdkDeviceState*>(data);
+  if (state == nullptr) {
+    return;
+  }
+  g_free(state->model_name);
+  g_free(state);
+}
+
+/** Adds libwacom model metadata without taking part in event capture. */
+static void enrich_gdk_device_metadata(StyletPlugin* self, GdkDevice* device,
+                                       gboolean is_pad,
+                                       GdkDeviceState* state) {
+#ifdef STYLET_HAS_LIBWACOM
+  if (self->libwacom_database == nullptr || device == nullptr ||
+      state == nullptr) {
+    return;
+  }
+  const guint64 vendor =
+      parse_device_identifier(gdk_device_get_vendor_id(device));
+  const guint64 product =
+      parse_device_identifier(gdk_device_get_product_id(device));
+  if (vendor == 0 || product == 0 || vendor > G_MAXINT ||
+      product > G_MAXINT) {
+    return;
+  }
+
+  WacomError* error = libwacom_error_new();
+  WacomDevice* model = libwacom_new_from_usbid(
+      self->libwacom_database, static_cast<int>(vendor),
+      static_cast<int>(product), error);
+  if (model != nullptr) {
+    const gchar* name = libwacom_get_name(model);
+    if (name != nullptr && *name != '\0') {
+      g_free(state->model_name);
+      state->model_name = g_strdup(name);
+    }
+    if (is_pad) {
+      state->button_count = MAX(
+          state->button_count,
+          static_cast<guint>(MAX(0, libwacom_get_num_buttons(model))));
+      if (libwacom_get_num_rings(model) > 0) {
+        state->features |= kFeaturePadRing;
+      }
+      if (libwacom_get_num_strips(model) > 0) {
+        state->features |= kFeaturePadStrip;
+      }
+      if (state->button_count > 0) {
+        state->features |= kFeaturePadButtons;
+      }
+    }
+    libwacom_destroy(model);
+  }
+  libwacom_error_free(&error);
+#else
+  (void)self;
+  (void)device;
+  (void)is_pad;
+  (void)state;
+#endif
+}
+
 /** Returns feature bits inferred from the axes of one GTK input device. */
 static guint gdk_device_features(GdkDevice* device) {
   if (device == nullptr) {
@@ -329,9 +406,14 @@ static void send_gdk_device_packet(StyletPlugin* self, const GdkEvent* event,
   fl_value_set_string_take(packet, "kind", fl_value_new_string(kind));
   fl_value_set_string_take(packet, "nativeDeviceIdentifier",
                            fl_value_new_string(identifier));
-  if (device != nullptr) {
+  if (state->model_name != nullptr) {
+    fl_value_set_string_take(packet, "name",
+                             fl_value_new_string(state->model_name));
+  } else if (device != nullptr) {
     fl_value_set_string_take(packet, "name",
                              fl_value_new_string(gdk_device_get_name(device)));
+  }
+  if (device != nullptr) {
     const guint64 vendor =
         parse_device_identifier(gdk_device_get_vendor_id(device));
     const guint64 product =
@@ -384,6 +466,8 @@ static void update_gdk_tool(StyletPlugin* self, const GdkEvent* event,
     state = g_new0(GdkDeviceState, 1);
     state->features = features;
     state->button_count = 2;
+    enrich_gdk_device_metadata(self, gdk_event_get_source_device(event),
+                               FALSE, state);
     g_hash_table_insert(self->announced_devices, g_strdup(identifier), state);
     send_gdk_device_packet(self, event, "added", "tool", identifier,
                            tool_name(event), state);
@@ -590,6 +674,8 @@ static GdkDeviceState* update_gdk_pad(StyletPlugin* self,
   const gboolean is_new = state == nullptr;
   if (is_new) {
     state = g_new0(GdkDeviceState, 1);
+    enrich_gdk_device_metadata(self, gdk_event_get_source_device(event), TRUE,
+                               state);
     g_hash_table_insert(self->announced_devices, g_strdup(identifier), state);
   }
   const gboolean changed =
@@ -749,6 +835,12 @@ static void stylet_plugin_dispose(GObject* object) {
   stylet_wayland_backend_free(self->wayland_backend);
   self->wayland_backend = nullptr;
 #endif
+#ifdef STYLET_HAS_LIBWACOM
+  if (self->libwacom_database != nullptr) {
+    libwacom_database_destroy(self->libwacom_database);
+    self->libwacom_database = nullptr;
+  }
+#endif
   disconnect_handler(self->view, &self->motion_handler);
   disconnect_handler(self->view, &self->button_press_handler);
   disconnect_handler(self->view, &self->button_release_handler);
@@ -770,7 +862,11 @@ static void stylet_plugin_class_init(StyletPluginClass* klass) {
 /** Initializes nullable handles and correlation state. */
 static void stylet_plugin_init(StyletPlugin* self) {
   self->announced_devices =
-      g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+      g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+                            free_gdk_device_state);
+#ifdef STYLET_HAS_LIBWACOM
+  self->libwacom_database = libwacom_database_new();
+#endif
 }
 
 void stylet_plugin_register_with_registrar(FlPluginRegistrar* registrar) {

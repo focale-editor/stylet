@@ -50,6 +50,19 @@ class MethodChannelStylet extends StyletPlatform {
       return StylusCapabilities.flutter;
     }
   }
+
+  @override
+  Future<bool> setTabletPadOverrideEnabled({required bool enabled}) async {
+    try {
+      return await methodChannel.invokeMethod<bool>(
+            'setTabletPadOverrideEnabled',
+            <String, Object?>{'enabled': enabled},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
 }
 
 /// Decodes one event-channel message, including historical event batches.
@@ -194,11 +207,27 @@ StylusActionEvent _decodeActionEvent(Map<Object?, Object?> map) {
     source: StyletEventSource.native,
     action: _actionFromName(_requiredString(map, 'action')),
     phase: _actionPhaseFromName(_requiredString(map, 'phase')),
+    preferredAction: switch (_optionalString(map, 'preferredAction')) {
+      final String name => _preferredActionFromName(name),
+      null => null,
+    },
     pose: poseValue == null
         ? null
         : _decodePose(_requiredMap(poseValue, context: 'pose')),
   );
 }
+
+/// Parses the system-configured behavior for a stylus body interaction.
+StylusPreferredAction _preferredActionFromName(String name) => switch (name) {
+  'ignore' => StylusPreferredAction.ignore,
+  'switchEraser' => StylusPreferredAction.switchEraser,
+  'switchPrevious' => StylusPreferredAction.switchPrevious,
+  'showColorPalette' => StylusPreferredAction.showColorPalette,
+  'showInkAttributes' => StylusPreferredAction.showInkAttributes,
+  'showContextualPalette' => StylusPreferredAction.showContextualPalette,
+  'runSystemShortcut' => StylusPreferredAction.runSystemShortcut,
+  _ => StylusPreferredAction.unknown,
+};
 
 /// Decodes a native tablet, tool, or pad connection change.
 StylusDeviceEvent _decodeDeviceEvent(Map<Object?, Object?> map) {

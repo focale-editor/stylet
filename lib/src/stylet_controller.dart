@@ -90,6 +90,19 @@ class Stylet {
   /// Features the active platform backend can potentially provide.
   Future<StylusCapabilities> get capabilities => _platform.getCapabilities();
 
+  /// Enables or releases raw tablet-pad controls that require a driver override.
+  ///
+  /// This is explicit because taking control of ExpressKeys, rings, or strips
+  /// temporarily replaces their per-application mappings in a compatible
+  /// Windows or macOS tablet driver. The backend restores those mappings when
+  /// disabled or unloaded. Linux pad events remain passive and need no opt-in.
+  Future<bool> setTabletPadOverrideEnabled({required bool enabled}) {
+    if (_isDisposed) {
+      throw StateError('This Stylet controller has been disposed.');
+    }
+    return _platform.setTabletPadOverrideEnabled(enabled: enabled);
+  }
+
   /// Normalizes [event] and merges a recent matching native sample when possible.
   StylusMotionEvent convertPointerEvent({required PointerEvent event}) {
     if (_isDisposed) {

@@ -15,6 +15,11 @@ set(PLUGIN_NAME "stylet_plugin")
 # embedder or desktop environment does not expose Wayland objects.
 option(STYLET_ENABLE_WAYLAND "Enable direct Wayland tablet-v2 support" ON)
 
+# Uses the model database only to enrich live GTK device descriptions. Event
+# capture remains provided by GTK or tablet-v2, and builds stay portable when
+# the optional development package is not installed.
+option(STYLET_ENABLE_LIBWACOM "Enable libwacom device metadata" ON)
+
 # The generated tablet protocol is bundled with the plugin, so consumers only
 # need the Wayland client library. The backend remains optional for Linux
 # distributions that build Flutter without Wayland development packages.
@@ -27,6 +32,14 @@ if(STYLET_ENABLE_WAYLAND)
   )
   if(WAYLAND_CLIENT_FOUND)
     set(STYLET_HAS_WAYLAND TRUE)
+  endif()
+endif()
+
+set(STYLET_HAS_LIBWACOM FALSE)
+if(STYLET_ENABLE_LIBWACOM)
+  pkg_check_modules(LIBWACOM QUIET IMPORTED_TARGET "libwacom>=2.12")
+  if(LIBWACOM_FOUND)
+    set(STYLET_HAS_LIBWACOM TRUE)
   endif()
 endif()
 
@@ -61,6 +74,9 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 if(STYLET_HAS_WAYLAND)
   target_compile_definitions(${PLUGIN_NAME} PRIVATE STYLET_HAS_WAYLAND=1)
 endif()
+if(STYLET_HAS_LIBWACOM)
+  target_compile_definitions(${PLUGIN_NAME} PRIVATE STYLET_HAS_LIBWACOM=1)
+endif()
 
 # Source include directories and library dependencies. Add any plugin-specific
 # dependencies here.
@@ -70,6 +86,9 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
 if(STYLET_HAS_WAYLAND)
   target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::WAYLAND_CLIENT)
+endif()
+if(STYLET_HAS_LIBWACOM)
+  target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::LIBWACOM)
 endif()
 
 # List of absolute paths to libraries that should be bundled with the plugin.
@@ -119,6 +138,10 @@ target_link_libraries(${TEST_RUNNER} PRIVATE PkgConfig::GTK)
 if(STYLET_HAS_WAYLAND)
   target_compile_definitions(${TEST_RUNNER} PRIVATE STYLET_HAS_WAYLAND=1)
   target_link_libraries(${TEST_RUNNER} PRIVATE PkgConfig::WAYLAND_CLIENT)
+endif()
+if(STYLET_HAS_LIBWACOM)
+  target_compile_definitions(${TEST_RUNNER} PRIVATE STYLET_HAS_LIBWACOM=1)
+  target_link_libraries(${TEST_RUNNER} PRIVATE PkgConfig::LIBWACOM)
 endif()
 target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main gmock)
 

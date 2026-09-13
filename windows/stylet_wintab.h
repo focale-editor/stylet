@@ -5,6 +5,7 @@
 
 #include <flutter/encodable_value.h>
 
+#include <functional>
 #include <memory>
 
 namespace stylet {
@@ -19,8 +20,11 @@ class WintabBackend {
   std::unique_ptr<Implementation> implementation_;
 
  public:
+  /** Callback used to publish device and tablet-pad packets. */
+  using EventCallback = std::function<void(flutter::EncodableMap)>;
+
   /** Tries to load the installed tablet driver and open a private context. */
-  explicit WintabBackend(HWND window);
+  WintabBackend(HWND window, EventCallback event_callback);
 
   /** Closes the private context and unloads the driver module. */
   ~WintabBackend();
@@ -33,6 +37,21 @@ class WintabBackend {
 
   /** Whether the installed driver exposes usable tangential-pressure packets. */
   bool supports_tangential_pressure() const;
+
+  /** Whether the driver advertises raw ExpressKey controls. */
+  bool supports_pad_buttons() const;
+
+  /** Whether the driver advertises one or more Touch Rings. */
+  bool supports_pad_rings() const;
+
+  /** Whether the driver advertises one or more Touch Strips. */
+  bool supports_pad_strips() const;
+
+  /** Enables or releases the driver's explicit application control override. */
+  bool SetTabletPadOverrideEnabled(bool enabled);
+
+  /** Updates whether device and control packets currently have a Dart consumer. */
+  void SetListening(bool listening);
 
   /** Caches driver data from one Wintab window message. */
   bool HandleWindowMessage(UINT message, WPARAM wparam, LPARAM lparam);

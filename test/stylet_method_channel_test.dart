@@ -141,12 +141,13 @@ void main() {
     },
   );
 
-  test('decodes a squeeze with its hover pose', () {
+  test('decodes a squeeze with its hover pose and preferred action', () {
     final StyletEvent decoded = decodeStyletEvent({
       'type': 'action',
       'timestampMicros': 9000,
       'action': 'squeeze',
       'phase': 'ended',
+      'preferredAction': 'switchEraser',
       'pose': {
         'x': 4,
         'y': 8,
@@ -160,6 +161,10 @@ void main() {
     check(decoded).isA<StylusActionEvent>()
       ..has((event) => event.action, 'action').equals(StylusAction.squeeze)
       ..has((event) => event.phase, 'phase').equals(StylusActionPhase.ended)
+      ..has(
+        (event) => event.preferredAction,
+        'preferredAction',
+      ).equals(StylusPreferredAction.switchEraser)
       ..has(
         (event) => event.pose?.position,
         'pose.position',
@@ -333,5 +338,29 @@ void main() {
     final StylusCapabilities capabilities = await platform.getCapabilities();
 
     check(capabilities).equals(StylusCapabilities.flutter);
+  });
+
+  test('explicitly toggles vendor tablet-pad overrides', () async {
+    messenger.setMockMethodCallHandler(methodChannel, (call) async {
+      check(call.method).equals('setTabletPadOverrideEnabled');
+      check(call.arguments)
+          .isA<Map<Object?, Object?>>()
+          .has((arguments) => arguments['enabled'], 'enabled')
+          .equals(true);
+      return true;
+    });
+    final MethodChannelStylet platform = MethodChannelStylet(
+      methodChannel: methodChannel,
+    );
+
+    check(await platform.setTabletPadOverrideEnabled(enabled: true)).isTrue();
+  });
+
+  test('pad override opt-in is unavailable without a native plugin', () async {
+    final MethodChannelStylet platform = MethodChannelStylet(
+      methodChannel: methodChannel,
+    );
+
+    check(await platform.setTabletPadOverrideEnabled(enabled: true)).isFalse();
   });
 }

@@ -95,6 +95,36 @@ enum StylusActionPhase {
   discrete,
 }
 
+/// System-configured behavior associated with a stylus body interaction.
+///
+/// Apple Pencil users choose this behavior in Settings. Stylet reports the
+/// preference but leaves the actual tool or UI change to the application.
+enum StylusPreferredAction {
+  /// Perform no application action.
+  ignore,
+
+  /// Toggle between the current drawing tool and the eraser.
+  switchEraser,
+
+  /// Toggle between the current and previously selected tools.
+  switchPrevious,
+
+  /// Show or hide the application's color palette.
+  showColorPalette,
+
+  /// Show or hide attributes for the selected ink tool.
+  showInkAttributes,
+
+  /// Show a contextual tool, undo, and redo palette.
+  showContextualPalette,
+
+  /// Run the system shortcut selected by the user.
+  runSystemShortcut,
+
+  /// A newer platform action unknown to this Stylet version.
+  unknown,
+}
+
 /// Base type for every event emitted by Stylet.
 @immutable
 sealed class StyletEvent {
@@ -432,6 +462,12 @@ final class StylusActionEvent extends StyletEvent {
   /// The lifecycle stage of this interaction.
   final StylusActionPhase phase;
 
+  /// Behavior selected by the user in platform settings, when exposed.
+  ///
+  /// For example, Apple Pencil can request [StylusPreferredAction.switchEraser]
+  /// even though the hardware has no physical eraser end.
+  final StylusPreferredAction? preferredAction;
+
   /// The stylus pose captured with the interaction, when available.
   final StylusPose? pose;
 
@@ -441,12 +477,13 @@ final class StylusActionEvent extends StyletEvent {
     required super.source,
     required this.action,
     required this.phase,
+    this.preferredAction,
     this.pose,
   });
 
   @override
   String toString() =>
-      'StylusActionEvent(action: ${action.name}, phase: ${phase.name}, pose: $pose)';
+      'StylusActionEvent(action: ${action.name}, phase: ${phase.name}, preferredAction: ${preferredAction?.name}, pose: $pose)';
 }
 
 /// Identifies the native object described by a device event.

@@ -16,9 +16,19 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "StyletWacomBridge",
+            path: "Sources/StyletWacomBridge",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("ApplicationServices")
+            ]
+        ),
+        .target(
             name: "stylet",
             dependencies: [
-                .product(name: "FlutterFramework", package: "FlutterFramework")
+                .product(name: "FlutterFramework", package: "FlutterFramework"),
+                "StyletWacomBridge"
             ],
             resources: [
                 // If your plugin requires a privacy manifest, for example if it collects user

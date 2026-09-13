@@ -257,9 +257,11 @@ class _TelemetryPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final StylusMotionEvent? sample = motion;
+    final String? preferredAction = action?.preferredAction?.name;
     final String actionLabel = action == null
         ? '—'
-        : '${action!.action.name} · ${action!.phase.name}';
+        : '${action!.action.name} · ${action!.phase.name}'
+              '${preferredAction == null ? '' : ' · $preferredAction'}';
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(

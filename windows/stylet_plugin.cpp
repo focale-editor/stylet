@@ -15,6 +15,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <variant>
 
 namespace stylet {
 namespace {
@@ -107,7 +108,12 @@ StyletPlugin::StyletPlugin(flutter::PluginRegistrarWindows* registrar)
   if (registrar_->GetView() != nullptr) {
     view_window_ = registrar_->GetView()->GetNativeWindow();
   }
-  wintab_backend_ = std::make_unique<WintabBackend>(view_window_);
+  wintab_backend_ = std::make_unique<WintabBackend>(
+      view_window_, [this](flutter::EncodableMap packet) {
+        if (event_sink_ != nullptr) {
+          event_sink_->Success(flutter::EncodableValue(std::move(packet)));
+        }
+      });
   prediction_backend_ = std::make_unique<WindowsPredictionBackend>(
       view_window_, [this](flutter::EncodableMap packet) {
         if (event_sink_ != nullptr) {
@@ -149,6 +155,7 @@ void StyletPlugin::RegisterWithRegistrar(
               flutter::StreamHandlerError<flutter::EncodableValue>> {
         plugin_pointer->wintab_backend_->ClearSamples();
         plugin_pointer->event_sink_ = std::move(events);
+        plugin_pointer->wintab_backend_->SetListening(true);
         plugin_pointer->prediction_backend_->SetListening(true);
         return nullptr;
       },
@@ -156,6 +163,8 @@ void StyletPlugin::RegisterWithRegistrar(
           -> std::unique_ptr<
               flutter::StreamHandlerError<flutter::EncodableValue>> {
         plugin_pointer->prediction_backend_->SetListening(false);
+        plugin_pointer->wintab_backend_->SetListening(false);
+        plugin_pointer->wintab_backend_->SetTabletPadOverrideEnabled(false);
         plugin_pointer->event_sink_.reset();
         plugin_pointer->last_positions_.clear();
         plugin_pointer->announced_devices_.clear();
@@ -194,6 +203,28 @@ void StyletPlugin::HandleMethodCall(
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   if (method_call.method_name() == "getCapabilities") {
     result->Success(flutter::EncodableValue(GetCurrentCapabilities()));
+    return;
+  }
+  if (method_call.method_name() == "setTabletPadOverrideEnabled") {
+    const auto* arguments =
+        std::get_if<flutter::EncodableMap>(method_call.arguments());
+    if (arguments == nullptr) {
+      result->Error("invalid-arguments", "Expected an argument map.");
+      return;
+    }
+    const auto enabled_entry =
+        arguments->find(flutter::EncodableValue("enabled"));
+    if (enabled_entry == arguments->end()) {
+      result->Error("invalid-arguments", "Missing boolean 'enabled'.");
+      return;
+    }
+    const auto* enabled = std::get_if<bool>(&enabled_entry->second);
+    if (enabled == nullptr) {
+      result->Error("invalid-arguments", "'enabled' must be a boolean.");
+      return;
+    }
+    result->Success(flutter::EncodableValue(
+        wintab_backend_->SetTabletPadOverrideEnabled(*enabled)));
     return;
   }
   result->NotImplemented();
@@ -415,6 +446,15 @@ flutter::EncodableList StyletPlugin::GetCurrentCapabilities() const {
   flutter::EncodableList capabilities = GetCapabilities();
   if (wintab_backend_->supports_tangential_pressure()) {
     capabilities.emplace_back("tangentialPressure");
+  }
+  if (wintab_backend_->supports_pad_buttons()) {
+    capabilities.emplace_back("tabletPadButtons");
+  }
+  if (wintab_backend_->supports_pad_rings()) {
+    capabilities.emplace_back("tabletPadRing");
+  }
+  if (wintab_backend_->supports_pad_strips()) {
+    capabilities.emplace_back("tabletPadStrip");
   }
   if (prediction_backend_->is_available()) {
     capabilities.emplace_back("predictedSamples");

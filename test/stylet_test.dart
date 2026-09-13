@@ -17,6 +17,9 @@ class _FakeStyletPlatform extends StyletPlatform {
   /// Capabilities returned to the controller under test.
   final StylusCapabilities capabilities;
 
+  /// Last requested native tablet-pad override state.
+  bool? tabletPadOverrideEnabled;
+
   /// Creates a fake backend with optional [capabilities].
   _FakeStyletPlatform({this.capabilities = StylusCapabilities.flutter});
 
@@ -25,6 +28,12 @@ class _FakeStyletPlatform extends StyletPlatform {
 
   @override
   Future<StylusCapabilities> getCapabilities() async => capabilities;
+
+  @override
+  Future<bool> setTabletPadOverrideEnabled({required bool enabled}) async {
+    tabletPadOverrideEnabled = enabled;
+    return true;
+  }
 
   /// Emits [event] as if it came from native code.
   void emit(StyletEvent event) => _controller.add(event);
@@ -244,6 +253,8 @@ void main() {
 
       check((await nextAction).action).equals(StylusAction.squeeze);
       check(await stylet.capabilities).equals(capabilities);
+      check(await stylet.setTabletPadOverrideEnabled(enabled: true)).isTrue();
+      check(platform.tabletPadOverrideEnabled).equals(true);
       await stylet.dispose();
       await platform.dispose();
     });
@@ -346,6 +357,8 @@ void main() {
           event: const PointerHoverEvent(kind: PointerDeviceKind.stylus),
         ),
       ).throws<StateError>();
+      check(() => stylet.setTabletPadOverrideEnabled(enabled: true))
+          .throws<StateError>();
       await platform.dispose();
     });
   });

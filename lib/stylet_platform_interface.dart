@@ -29,4 +29,14 @@ abstract class StyletPlatform extends PlatformInterface {
   /// Returns every feature this backend can potentially expose.
   Future<StylusCapabilities> getCapabilities() async =>
       StylusCapabilities.flutter;
+
+  /// Enables or releases vendor-driver ownership of tablet-pad controls.
+  ///
+  /// Windows and macOS drivers require an application to override the user's
+  /// normal ExpressKey, ring, and strip mappings before they deliver raw
+  /// control events. Implementations return whether at least one compatible
+  /// control accepted the requested state. Platforms with passive pad input
+  /// leave this disabled and return false.
+  Future<bool> setTabletPadOverrideEnabled({required bool enabled}) async =>
+      false;
 }

@@ -48,8 +48,7 @@ import 'package:stylet/stylet.dart';
 final StylusCapabilities capabilities = await Stylet.instance.capabilities;
 
 if (capabilities.supports(StylusFeature.predictedSamples)) {
-  final StreamSubscription<StylusPredictionEvent> subscription =
-      Stylet.instance.predictions.listen(replacePredictedPath);
+  final StreamSubscription<StylusPredictionEvent> subscription = Stylet.instance.predictions.listen(replacePredictedPath);
   // Cancel the subscription with the owning object.
 }
 ```

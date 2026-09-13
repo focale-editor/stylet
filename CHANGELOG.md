@@ -1,5 +1,11 @@
 # 📰 Changelog
 
+## v0.1.2
+Released on September 13, 2026.
+
+* **DOCS**: Added contributing guide, package screenshot, and pubspec metadata. ([#f1a0bbc](https://github.com/focale-editor/stylet/commit/f1a0bbc))
+* **FEAT**: Improved Android support, tablet pad overrides, and preferred actions. ([#abce989](https://github.com/focale-editor/stylet/commit/abce989))
+
 ## v0.1.1
 Released on August 26, 2026.
 

@@ -224,7 +224,7 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
     let position = recognizer.location(in: view)
     let previousPosition = lastHoverPosition ?? position
     let isRemoved = recognizer.state == .ended || recognizer.state == .cancelled
-    var features = ["distance", "tilt", "orientation", "hover"]
+    var features = ["distance", "hover"]
     var packet: [String: Any] = [
       "type": "motion",
       "timestampMicros": Int64((ProcessInfo.processInfo.systemUptime * 1_000_000).rounded()),
@@ -241,9 +241,12 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       "isDown": false,
       "distance": Double(recognizer.zOffset),
       "distanceMaximum": 1.0,
-      "tilt": Double((.pi / 2) - recognizer.altitudeAngle),
-      "orientation": Double(recognizer.azimuthAngle(in: view)),
     ]
+    if #available(iOS 16.4, *) {
+      packet["tilt"] = Double((.pi / 2) - recognizer.altitudeAngle)
+      packet["orientation"] = Double(recognizer.azimuthAngle(in: view))
+      features.append(contentsOf: ["tilt", "orientation"])
+    }
     if #available(iOS 17.5, *) {
       packet["barrelRotation"] = Double(recognizer.rollAngle)
       features.append("barrelRotation")

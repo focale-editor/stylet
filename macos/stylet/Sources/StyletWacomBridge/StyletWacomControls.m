@@ -72,7 +72,6 @@ static NSAppleEventDescriptor *_Nullable ObjectSpecifier(
 static NSAppleEventDescriptor *DriverTarget(void) {
   OSType signature = kWacomDriverSignature;
   return [NSAppleEventDescriptor descriptorWithDescriptorType:
-                                     typeApplicationSignature
                                                         bytes:&signature
                                                        length:sizeof(signature)];
 }
@@ -250,8 +249,6 @@ static NSString *ControlKey(UInt32 tablet, StyletWacomControlType type,
                                     control];
 }
 
-static Int64 TimestampMicros(void) {
-  return (Int64)llround(NSProcessInfo.processInfo.systemUptime * 1000000.0);
 }
 
 @interface StyletWacomControls ()

@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:stylet/stylet.dart';
@@ -24,6 +25,13 @@ void main() {
     await gesture.moveBy(const Offset(30, 20));
     await gesture.up();
     await tester.pumpAndSettle();
+    final Finder phase = find
+        .ancestor(of: find.text('Phase'), matching: find.byType(Column))
+        .first;
+    expect(
+      find.descendant(of: phase, matching: find.text('up')),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 }

@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:stylet/stylet.dart';
+import 'package:stylet_example/main.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -8,6 +9,8 @@ void main() {
   testWidgets('the native backend reports at least Flutter capabilities', (
     tester,
   ) async {
+    await tester.pumpWidget(const StyletExampleApp());
+    await tester.pumpAndSettle();
     final StylusCapabilities capabilities = await Stylet.instance.capabilities;
 
     expect(capabilities.supports(StylusFeature.pressure), isTrue);

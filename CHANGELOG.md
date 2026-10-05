@@ -1,5 +1,14 @@
 # 📰 Changelog
 
+## v0.1.3
+Released on October 5, 2026.
+
+* **FEAT**: Added Wacom tablet control bridge. ([#3bc3d52](https://github.com/focale-editor/stylet/commit/3bc3d52))
+* **FEAT**: Improved Android support, tablet pad overrides, and preferred actions. ([#6d5a216](https://github.com/focale-editor/stylet/commit/6d5a216))
+* **FEAT**: Now gating for stylus features by iOS version. ([#27604db](https://github.com/focale-editor/stylet/commit/27604db))
+* **FIX**: Now disabling Windows min/max macros for the plugin and native tests so pen backends compile with the standard C++ algorithms and numeric limits. ([#2e9c0ab](https://github.com/focale-editor/stylet/commit/2e9c0ab))
+* **CHORE**: Expand integration tests for capability checks. ([#3555a16](https://github.com/focale-editor/stylet/commit/3555a16))
+
 ## v0.1.2
 Released on September 13, 2026.
 

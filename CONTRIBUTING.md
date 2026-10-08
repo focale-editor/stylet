@@ -56,6 +56,11 @@ flutter test
 
 Add any narrower platform, corpus, or integration checks relevant to the files you changed. If a check cannot run in your environment, explain why in the pull request.
 
+On macOS, `flutter test test/stylet_macos_native_test.dart` also compiles the
+Objective-C Wacom bridge with Xcode's SDK and checks its Apple Event address and
+monotonic timestamps. This test needs no tablet or Wacom driver and is skipped on
+other operating systems.
+
 ## Pull requests
 
 Open the pull request against `main` and:
@@ -80,4 +85,3 @@ Pull request titles must use a [Conventional Commits](https://www.conventionalco
 Add `!` for an accepted breaking change, for example `feat!: replace the legacy decoder API`.
 
 A maintainer may ask for changes before merging. Continue pushing to the pull request branch; the pull request updates automatically.
-

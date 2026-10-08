@@ -1,5 +1,10 @@
 # 📰 Changelog
 
+## v0.1.4
+Released on October 8, 2026.
+
+* **FIX**: Fixed some compilation errors on macOS. ([#6b4fd02](https://github.com/focale-editor/stylet/commit/6b4fd02))
+
 ## v0.1.3
 Released on October 5, 2026.
 

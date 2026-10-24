@@ -68,7 +68,7 @@ private final class PencilObservationGestureRecognizer: UIGestureRecognizer {
 
 /// iOS backend for Apple Pencil motion, double-tap, squeeze, and barrel roll.
 public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
-  UIPencilInteractionDelegate
+  UIPencilInteractionDelegate, UIGestureRecognizerDelegate
 {
   /// Request-response channel retained for the plugin lifetime.
   private let methodChannel: FlutterMethodChannel
@@ -272,6 +272,7 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
         self?.sendCorrections(for: touches)
       }
     )
+    recognizer.delegate = self
     view.addGestureRecognizer(recognizer)
     touchRecognizer = recognizer
 
@@ -279,6 +280,7 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       let hover = UIHoverGestureRecognizer(target: self, action: #selector(handleHover(_:)))
       hover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
       hover.cancelsTouchesInView = false
+      hover.delegate = self
       view.addGestureRecognizer(hover)
       hoverRecognizer = hover
     }
@@ -287,6 +289,22 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
     interaction.delegate = self
     view.addInteraction(interaction)
     pencilInteraction = interaction
+  }
+
+  /// Passive observers never compete with Flutter's or the system's recognizers.
+  public func gestureRecognizer(
+    _ gestureRecognizer: UIGestureRecognizer,
+    shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+  ) -> Bool {
+    true
+  }
+
+  /// Passive observers never wait for other recognizers to fail.
+  public func gestureRecognizer(
+    _ gestureRecognizer: UIGestureRecognizer,
+    shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+  ) -> Bool {
+    false
   }
 
   /// Removes every observer and clears interaction-scoped correlation state.

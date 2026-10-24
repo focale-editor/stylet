@@ -79,6 +79,9 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
   /// Flutter view whose coordinate system defines emitted positions.
   private weak var view: UIView?
 
+  /// Registrar kept to find Flutter's view once it exists (scene lifecycle).
+  private weak var registrar: FlutterPluginRegistrar?
+
   /// Current Dart event consumer, or `nil` while the stream is idle.
   private var eventSink: FlutterEventSink?
 
@@ -123,6 +126,7 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
       binaryMessenger: registrar.messenger(),
       view: registrar.viewController?.view
     )
+    instance.registrar = registrar
     registrar.addMethodCallDelegate(instance, channel: instance.methodChannel)
     instance.eventChannel.setStreamHandler(instance)
   }
@@ -258,6 +262,17 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
 
   /// Installs native observers without altering Flutter's gesture decisions.
   private func startObserving() {
+    if view == nil {
+      view = registrar?.viewController?.view ?? StyletPlugin.keyWindowRootView()
+    }
+    if view == nil {
+      // Flutter's view may not exist yet when Dart starts listening: retry.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+        guard let self, self.eventSink != nil, self.touchRecognizer == nil else { return }
+        self.startObserving()
+      }
+      return
+    }
     guard touchRecognizer == nil, let view else {
       return
     }
@@ -287,6 +302,17 @@ public final class StyletPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
     interaction.delegate = self
     view.addInteraction(interaction)
     pencilInteraction = interaction
+  }
+
+  /// The key window's root view, for apps whose registrar has no view controller yet.
+  private static func keyWindowRootView() -> UIView? {
+    for scene in UIApplication.shared.connectedScenes {
+      guard let windowScene = scene as? UIWindowScene else { continue }
+      if let window = windowScene.windows.first(where: { $0.isKeyWindow }) ?? windowScene.windows.first {
+        return window.rootViewController?.view
+      }
+    }
+    return nil
   }
 
   /// Removes every observer and clears interaction-scoped correlation state.

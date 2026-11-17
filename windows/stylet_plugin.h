@@ -39,6 +39,14 @@ class StyletPlugin : public flutter::Plugin {
   /** Identifier returned for the registered top-level window procedure. */
   int window_proc_delegate_id_ = -1;
 
+  /**
+   * Whether the Flutter view window is subclassed. Windows delivers
+   * WM_POINTER messages to the view (a child window), never to the top-level
+   * window, so this subclass is the primary observation path. The top-level
+   * delegate is only a fallback for when no view window is available.
+   */
+  bool view_window_subclassed_ = false;
+
   /** Request-response channel retained for the plugin lifetime. */
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       method_channel_;
@@ -87,7 +95,13 @@ class StyletPlugin : public flutter::Plugin {
       const flutter::MethodCall<flutter::EncodableValue>& method_call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
-  /** Observes one top-level window message without consuming it. */
+  /** Window subclass procedure observing the Flutter view window's messages. */
+  static LRESULT CALLBACK ViewWindowSubclassProc(HWND window, UINT message,
+                                                 WPARAM wparam, LPARAM lparam,
+                                                 UINT_PTR subclass_id,
+                                                 DWORD_PTR reference_data);
+
+  /** Observes one window message without consuming it. */
   std::optional<LRESULT> HandleWindowMessage(HWND window, UINT message,
                                              WPARAM wparam, LPARAM lparam);
 

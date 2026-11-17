@@ -6,6 +6,8 @@
 #include <flutter/event_stream_handler_functions.h>
 #include <flutter/standard_method_codec.h>
 
+#include <commctrl.h>
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -37,6 +39,9 @@ constexpr int64_t kFlutterSecondaryStylusButton = 4;
 
 /** Number of radians in one degree. */
 constexpr double kDegreesToRadians = 3.14159265358979323846 / 180.0;
+
+/** Identifier for Stylet's subclass of the Flutter view window. */
+constexpr UINT_PTR kViewWindowSubclassId = 0x5354594C;  // "STYL"
 
 /** Inserts one value into an encodable map with a string key. */
 void SetValue(flutter::EncodableMap* map, const char* key,
@@ -124,6 +129,11 @@ StyletPlugin::StyletPlugin(flutter::PluginRegistrarWindows* registrar)
 
 StyletPlugin::~StyletPlugin() {
   event_sink_.reset();
+  if (view_window_subclassed_) {
+    RemoveWindowSubclass(view_window_, &StyletPlugin::ViewWindowSubclassProc,
+                         kViewWindowSubclassId);
+    view_window_subclassed_ = false;
+  }
   if (registrar_ != nullptr && window_proc_delegate_id_ >= 0) {
     registrar_->UnregisterTopLevelWindowProcDelegate(window_proc_delegate_id_);
   }
@@ -173,10 +183,27 @@ void StyletPlugin::RegisterWithRegistrar(
       });
   plugin->event_channel_->SetStreamHandler(std::move(stream_handler));
 
+  // WM_POINTER messages go to the Flutter view, a child of the top-level
+  // window, and Flutter does not forward them to its parent. Observe the view
+  // directly; the plugin object outlives the subclass (removed in the
+  // destructor or on WM_NCDESTROY).
+  if (plugin->view_window_ != nullptr) {
+    plugin->view_window_subclassed_ =
+        SetWindowSubclass(plugin->view_window_,
+                          &StyletPlugin::ViewWindowSubclassProc,
+                          kViewWindowSubclassId,
+                          reinterpret_cast<DWORD_PTR>(plugin_pointer)) != FALSE;
+  }
+
   plugin->window_proc_delegate_id_ =
       registrar->RegisterTopLevelWindowProcDelegate(
           [plugin_pointer](HWND window, UINT message, WPARAM wparam,
-                           LPARAM lparam) {
+                           LPARAM lparam) -> std::optional<LRESULT> {
+            // Fallback only: avoid emitting samples twice when the view
+            // window subclass is active.
+            if (plugin_pointer->view_window_subclassed_) {
+              return std::nullopt;
+            }
             return plugin_pointer->HandleWindowMessage(window, message, wparam,
                                                        lparam);
           });
@@ -228,6 +255,21 @@ void StyletPlugin::HandleMethodCall(
     return;
   }
   result->NotImplemented();
+}
+
+LRESULT CALLBACK StyletPlugin::ViewWindowSubclassProc(
+    HWND window, UINT message, WPARAM wparam, LPARAM lparam,
+    UINT_PTR subclass_id, DWORD_PTR reference_data) {
+  auto* plugin = reinterpret_cast<StyletPlugin*>(reference_data);
+  if (message == WM_NCDESTROY) {
+    RemoveWindowSubclass(window, &StyletPlugin::ViewWindowSubclassProc,
+                         subclass_id);
+    plugin->view_window_subclassed_ = false;
+  } else {
+    // Observe only; Flutter still receives every message unchanged.
+    plugin->HandleWindowMessage(window, message, wparam, lparam);
+  }
+  return DefSubclassProc(window, message, wparam, lparam);
 }
 
 std::optional<LRESULT> StyletPlugin::HandleWindowMessage(

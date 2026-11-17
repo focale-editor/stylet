@@ -61,6 +61,8 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL NOMINMAX)
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
+# SetWindowSubclass/DefSubclassProc, used to observe the Flutter view window.
+target_link_libraries(${PLUGIN_NAME} PRIVATE comctl32)
 
 if(STYLET_ENABLE_EXPERIMENTAL_WINDOWS_PREDICTION)
   if(CMAKE_VERSION VERSION_LESS 3.31)
